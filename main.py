@@ -46,38 +46,82 @@ active_guesser = {}
 # Replace image URLs with actual hosted images (Discord CDN, Imgur, etc.)
 
 MAPS_DATA = {
-    'Dust':        {'image': 'https://i.imgur.com/placeholder1.png', 'aliases': ['dust 1']},
-    'Mirage':      {'image': 'https://i.imgur.com/placeholder2.png', 'aliases': []},
-    'Inferno':     {'image': 'https://i.imgur.com/placeholder3.png', 'aliases': []},
-    'Nuke':        {'image': 'https://i.imgur.com/placeholder4.png', 'aliases': []},
-    'Overpass':    {'image': 'https://i.imgur.com/placeholder5.png', 'aliases': []},
-    'Vertigo':     {'image': 'https://i.imgur.com/placeholder6.png', 'aliases': []},
-    'Ancient':     {'image': 'https://i.imgur.com/placeholder7.png', 'aliases': []},
-    'Anubis':      {'image': 'https://i.imgur.com/placeholder8.png', 'aliases': []},
+    import discord
+from discord import app_commands
+from discord.ext import commands
+import os
+import random
+import asyncio
+import datetime
+from keep_alive import keep_alive
+
+# --- CONFIGURATION ---
+TOKEN = os.getenv('DISCORD_TOKEN')
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix='.', intents=intents)
+
+# --- MVSD DATABASE (Maps & Weapons) ---
+# Replace the 'image' URLs with actual MVSD screenshot links
+MAPS_DATA = {
+    'Refinery': {'image': 'https://i.imgur.com/placeholder1.png', 'aliases': ['ref']},
+    'Clown': {'image': 'https://i.imgur.com/placeholder2.png', 'aliases': ['clown']},
+    'Library': {'image': 'https://i.imgur.com/placeholder3.png', 'aliases': ['lib']},
+    'Barn': {'image': 'https://i.imgur.com/placeholder4.png', 'aliases': []},
+    'Ship': {'image': 'https://i.imgur.com/placeholder5.png', 'aliases': []},
 }
 
 WEAPONS_DATA = {
-    'Karambit Fade':       {'image': 'https://i.imgur.com/placeholder9.png',  'aliases': ['fade karambit', 'kara fade']},
-    'M9 Bayonet Doppler':  {'image': 'https://i.imgur.com/placeholder10.png', 'aliases': ['m9 doppler', 'doppler m9']},
-    'Butterfly Knife':     {'image': 'https://i.imgur.com/placeholder11.png', 'aliases': ['butterfly', 'bfly']},
-    'Stiletto Crimson Web':{'image': 'https://i.imgur.com/placeholder12.png', 'aliases': ['stiletto', 'crimson web stiletto']},
-    'AWP Dragon Lore':     {'image': 'https://i.imgur.com/placeholder13.png', 'aliases': ['dragon lore', 'dlore']},
-    'AK-47 Fire Serpent':  {'image': 'https://i.imgur.com/placeholder14.png', 'aliases': ['fire serpent', 'ak fire serpent']},
-    'M4A4 Howl':           {'image': 'https://i.imgur.com/placeholder15.png', 'aliases': ['howl', 'm4 howl']},
-    'Glock Fade':          {'image': 'https://i.imgur.com/placeholder16.png', 'aliases': ['glock fade', 'fade glock']},
+    'Winx': {'image': 'https://i.imgur.com/placeholder6.png', 'aliases': ['winx set']},
+    'Mermaid': {'image': 'https://i.imgur.com/placeholder7.png', 'aliases': ['mermaid']},
+    'Celestial': {'image': 'https://i.imgur.com/placeholder8.png', 'aliases': []},
+    'Dragonfire': {'image': 'https://i.imgur.com/placeholder9.png', 'aliases': ['df']},
 }
 
-VALUES_DATA = {
-    'karambit fade':        '120–140 keys',
-    'm9 bayonet doppler':   '80–100 keys',
-    'butterfly knife':      '60–75 keys',
-    'stiletto crimson web': '35–45 keys',
-    'awp dragon lore':      '180–220 keys',
-    'ak-47 fire serpent':   '90–110 keys',
-    'm4a4 howl':            '250–300 keys',
-    'glock fade':           '25–35 keys',
-}
+    class JoinView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=None)
+            self.players = [interaction.user.id]
 
+        @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
+        async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+            if inter.user.id in self.players:
+                return await inter.response.send_message("You are already in!", ephemeral=True)
+            
+            self.players.append(inter.user.id)
+            embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{max_players}")
+            
+            if len(self.players) >= max_players:
+                button.disabled = True
+                embed.color = discord.Color.red()
+                embed.add_field(name="Status", value="🔴 Full / Starting", inline=False)
+                await inter.message.edit(embed=embed, view=self)
+                # Logic to create Thread
+                thread = await inter.message.create_thread(name=f"Match-{league_id}")
+                await thread.send(f"Match is full! Players: " + " ".join([f"<@{p}>" for p in self.players]))
+            else:
+                await inter.message.edit(embed=embed, view=self)
+            
+            await inter.response.send_message("Joined!", ephemeral=True)
+
+    await interaction.response.send_message(embed=embed, view=JoinView())
+
+# --- GUESSER GAMES ---
+@bot.tree.command(name="guessmap", description="Start an MVSD map guessing game")
+async def guessmap(interaction: discord.Interaction):
+    map_name, data = random.choice(list(MAPS_DATA.items()))
+    embed = discord.Embed(title="🖼️ Guess the MVSD Map!", description="You have 60 seconds. Use `.hints` for help!")
+    embed.set_image(url=data)
+    await interaction.response.send_message(embed=embed)
+
+    def check(m):
+        return m.channel == interaction.channel and m.content.lower() in ([map_name.lower()] + data['aliases'])
+
+    try:
+        msg = await bot.wait_for('message', check=check, timeout=60.0)
+        await msg.add_reaction("✅")
+        await interaction.followup.send(f"🎉 **{msg.author.name}** guessed it! It was **{map_name}**!")
+    except asyncio.TimeoutError:
+        await interaction.followup.send(f"⏰ Time's up! The map was **{map_name}**.")
 
 def get_guild_settings(guild_id: int) -> dict:
     """Return settings for a guild, creating defaults if needed."""
