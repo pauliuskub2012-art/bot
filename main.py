@@ -167,21 +167,35 @@ class JoinView(discord.ui.View):
         else:
             await inter.message.edit(embed=embed, view=self)
             await inter.response.send_message("Joined!", ephemeral=True)
+@bot.command()
+async def s(ctx, index: int = 1):
+    """Show deleted messages. Usage: .s 1, .s 2 etc."""
+    channel_id = ctx.channel.id
+    if channel_id not in deleted_messages or not deleted_messages[channel_id]:
+        return await ctx.send("There are no deleted messages in this channel, lilbro 💀")
 
-# --- ČIA TURI PRASIDĖTI KITA KOMANDA (Pvz. .s) ---
-
-
-    # Patikriname, ar puslapis egzistuoja
+    # Check if page exists
     if index < 1 or index > len(deleted_messages[channel_id]):
         return await ctx.send(f"Invalid page! Only {len(deleted_messages[channel_id])} messages saved.")
 
     data = deleted_messages[channel_id][index - 1]
     
-    embed = discord.Embed(description=data["content"] or "[No Text Content]", color=discord.Color.orange())
+    embed = discord.Embed(description=data["content"] or "", color=discord.Color.orange())
     embed.set_author(name=data["author"], icon_url=data["author_icon"])
     embed.set_footer(text=f"Message {index}/{len(deleted_messages[channel_id])} • Deleted at {data['time']}")
     
     await ctx.send(embed=embed)
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def cs(ctx):
+    """Clear all sniped messages in the channel."""
+    if ctx.channel.id in deleted_messages:
+        deleted_messages[ctx.channel.id] = []
+        await ctx.send("✅ Sniped messages history cleared!")
+    else:
+        await ctx.send("Nothing to clear, lilbro 💀")
+
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
