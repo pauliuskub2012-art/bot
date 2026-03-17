@@ -142,18 +142,32 @@ WEAPONS_DATA = {
     'Dragonfire': {'image': 'https://i.imgur.com/placeholder9.png', 'aliases': ['df']},
 }
 
-    class JoinView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-            self.players = [interaction.user.id]
+   class JoinView(discord.ui.View):
+    def __init__(self, max_players, host_id):
+        super().__init__(timeout=None)
+        self.max_players = max_players
+        self.players = [host_id]
 
-        @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
-        async def join(self, inter: discord.Interaction, button: discord.ui.Button):
-            if inter.user.id in self.players:
-                return await inter.response.send_message("You are already in!", ephemeral=True)
+    @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
+    async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+        if inter.user.id in self.players:
+            return await inter.response.send_message("You are already in!", ephemeral=True)
+        
+        self.players.append(inter.user.id)
+        
+        # Atnaujiname embed informaciją
+        embed = inter.message.embeds[0]
+        embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
+        
+        if len(self.players) >= self.max_players:
+            button.disabled = True
+            embed.color = discord.Color.red()
+            await inter.message.edit(embed=embed, view=self)
+            # Čia gali pridėti gijos (Thread) kūrimą
+        else:
+            await inter.message.edit(embed=embed, view=self)
             
-            self.players.append(inter.user.id)
-            embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{max_players}")
+        await inter.response.send_message("Joined!", ephemeral=True)
             
             if len(self.players) >= max_players:
                 button.disabled = True
