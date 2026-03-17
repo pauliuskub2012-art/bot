@@ -19,6 +19,51 @@ intents.members = True
 # Create bot instance with '!' and '.' prefix
 bot = commands.Bot(command_prefix=['!', '.'], intents=intents)
 
+class JoinView(discord.ui.View):
+    def __init__(self, league_id, max_players, host):
+        super().__init__(timeout=None)
+        self.league_id = league_id
+        self.max_players = max_players
+        self.players = [host.id]
+        self.thread = None
+
+    @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
+    async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+        if inter.user.id in self.players:
+            return await inter.response.send_message("You're already in!", ephemeral=True)
+        
+        self.players.append(inter.user.id)
+        
+        # Update Embed count
+        embed = inter.message.embeds[0]
+        embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
+        embed.set_field_at(2, name="Spots Left", value=f"{self.max_players - len(self.players)}")
+
+        # Create Private Thread on first join
+        if self.thread is None:
+            # Create a PRIVATE thread (type=discord.ChannelType.private_thread)
+            self.thread = await inter.message.create_thread(
+                name=f"League-{self.league_id}",
+                type=discord.ChannelType.private_thread
+            )
+            # Add Host automatically
+            await self.thread.add_user(inter.message.interaction.user)
+
+        # Add the person who clicked "Join" to the private thread
+        await self.thread.add_user(inter.user)
+        
+        # Check if Full
+        if len(self.players) >= self.max_players:
+            button.disabled = True
+            embed.color = discord.Color.red()
+            embed.set_field_at(5, name="Status", value="🔴 Full / Match Starting", inline=False)
+            await inter.message.edit(embed=embed, view=self)
+            await self.thread.send(f"**Match is Starting!**\nPlayers: " + " ".join([f"<@{p}>" for p in self.players]))
+        else:
+            await inter.message.edit(embed=embed, view=self)
+        
+        await inter.response.send_message(f"✅ Joined! Check the private thread: {self.thread.mention}", ephemeral=True)
+
 # ========== IN-MEMORY STORAGE ==========
 
 # League storage: keyed by league_id
