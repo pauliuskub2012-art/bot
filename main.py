@@ -155,32 +155,21 @@ class JoinView(discord.ui.View):
         
         self.players.append(inter.user.id)
         
-        # Atnaujiname embed informaciją
-        embeds = inter.message.embeds[0]
-        embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
+            @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
+    async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+        if inter.user.id in self.players:
+            return await inter.response.send_message("You are already in!", ephemeral=True)
         
+        self.players.append(inter.user.id)
+        
+        # Svarbu: visos šios eilutės turi turėti lygiai 8 tarpus kairėje
         if len(self.players) >= self.max_players:
             button.disabled = True
-            embed.color = discord.Color.red()
-            await inter.message.edit(embed=embed, view=self)
-            # Čia gali pridėti gijos (Thread) kūrimą
+            # Čia turi būti tavo gijų kūrimo logika
+            await inter.response.send_message("League is full! Starting...", ephemeral=True)
         else:
-            await inter.message.edit(embed=embed, view=self)
-            
             await inter.response.send_message("Joined!", ephemeral=True)
-            
-                   if len(self.players) >= self.max_players:
-            button.disabled = True
-            embed = inter.message.embeds[0]
-            embed.color = discord.Color.red()
-            embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
-            embed.add_field(name="Status", value="🔴 Full / Starting", inline=False)
-            
-            await inter.message.edit(embed=embed, view=self)
-            
-            # Create Private Thread
-            thread = await inter.message.create_thread(name=f"Match-Starting", type=discord.ChannelType.private_thread)
-            await thread.send(f"Match is full! Players: " + " ".join([f"<@{p}>" for p in self.players]))
+
         else:
             embed = inter.message.embeds[0]
             embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
