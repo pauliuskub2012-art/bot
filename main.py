@@ -155,34 +155,21 @@ class JoinView(discord.ui.View):
         
         self.players.append(inter.user.id)
         
-            @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
-    async def join(self, inter: discord.Interaction, button: discord.ui.Button):
-        if inter.user.id in self.players:
-            return await inter.response.send_message("You are already in!", ephemeral=True)
+        # Atnaujiname žaidėjų skaičių embed'e
+        embed = inter.message.embeds[0]
+        embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
         
-        self.players.append(inter.user.id)
-        
-        # Svarbu: visos šios eilutės turi turėti lygiai 8 tarpus kairėje
         if len(self.players) >= self.max_players:
             button.disabled = True
-            # Čia turi būti tavo gijų kūrimo logika
+            embed.color = discord.Color.red()
+            await inter.message.edit(embed=embed, view=self)
             await inter.response.send_message("League is full! Starting...", ephemeral=True)
         else:
-            await inter.response.send_message("Joined!", ephemeral=True)
-
-        else:
-            embed = inter.message.embeds[0]
-            embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
             await inter.message.edit(embed=embed, view=self)
-            
             await inter.response.send_message("Joined!", ephemeral=True)
 
-@bot.command()
-async def s(ctx, index: int = 1):
-    """Show deleted messages. Usage: .s 1, .s 2 etc."""
-    channel_id = ctx.channel.id
-    if channel_id not in deleted_messages or not deleted_messages[channel_id]:
-        return await ctx.send("There are no deleted messages in this channel, lilbro 💀")
+# --- ČIA TURI PRASIDĖTI KITA KOMANDA (Pvz. .s) ---
+
 
     # Patikriname, ar puslapis egzistuoja
     if index < 1 or index > len(deleted_messages[channel_id]):
