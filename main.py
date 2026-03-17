@@ -10,6 +10,15 @@ import random
 import string
 import re
 from typing import Optional
+import discord
+from discord import app_commands
+from discord.ext import commands
+import os
+import random
+import asyncio
+import datetime
+from keep_alive import keep_alive
+
 
 # Set up intents
 intents = discord.Intents.default()
@@ -110,17 +119,6 @@ active_guesser = {}
 
 # ── MVSD Guesser Data ──────────────────────────────────────────────────────────
 # Replace image URLs with actual hosted images (Discord CDN, Imgur, etc.)
-
-MAPS_DATA = {
-    import discord
-from discord import app_commands
-from discord.ext import commands
-import os
-import random
-import asyncio
-import datetime
-from keep_alive import keep_alive
-}
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
