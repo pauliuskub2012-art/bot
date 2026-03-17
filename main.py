@@ -142,7 +142,7 @@ WEAPONS_DATA = {
     'Dragonfire': {'image': 'https://i.imgur.com/placeholder9.png', 'aliases': ['df']},
 }
 
-   class JoinView(discord.ui.View):
+class JoinView(discord.ui.View):
     def __init__(self, max_players, host_id):
         super().__init__(timeout=None)
         self.max_players = max_players
@@ -156,7 +156,7 @@ WEAPONS_DATA = {
         self.players.append(inter.user.id)
         
         # Atnaujiname embed informaciją
-        embed = inter.message.embeds[0]
+        embeds = inter.message.embeds[0]
         embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
         
         if len(self.players) >= self.max_players:
@@ -167,7 +167,7 @@ WEAPONS_DATA = {
         else:
             await inter.message.edit(embed=embed, view=self)
             
-        await inter.response.send_message("Joined!", ephemeral=True)
+            await inter.response.send_message("Joined!", ephemeral=True)
             
             if len(self.players) >= max_players:
                 button.disabled = True
