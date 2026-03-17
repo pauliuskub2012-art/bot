@@ -18,6 +18,27 @@ intents.members = True
 
 # Create bot instance with '!' and '.' prefix
 bot = commands.Bot(command_prefix=['!', '.'], intents=intents)
+deleted_messages = {} # Saugo žinutes pagal kanalus
+
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot: return # Ignoruoti botus
+    
+    if message.channel.id not in deleted_messages:
+        deleted_messages[message.channel.id] = []
+    
+    # Pridedame žinutę į sąrašo pradžią
+    sniped_data = {
+        "content": message.content,
+        "author": message.author.name,
+        "author_icon": str(message.author.display_avatar.url),
+        "time": datetime.datetime.now().strftime("%H:%M:%S")
+    }
+    deleted_messages[message.channel.id].insert(0, sniped_data)
+    
+    # Saugome tik paskutines 20 ištrintų žinučių tame kanale
+    if len(deleted_messages[message.channel.id]) > 20:
+        deleted_messages[message.channel.id].pop()
 
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_players, host):
@@ -99,6 +120,7 @@ import random
 import asyncio
 import datetime
 from keep_alive import keep_alive
+}
 
 # --- CONFIGURATION ---
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -149,6 +171,35 @@ WEAPONS_DATA = {
             await inter.response.send_message("Joined!", ephemeral=True)
 
     await interaction.response.send_message(embed=embed, view=JoinView())
+
+@bot.command()
+async def s(ctx, index: int = 1):
+    """Show deleted messages. Usage: .s 1, .s 2 etc."""
+    channel_id = ctx.channel.id
+    if channel_id not in deleted_messages or not deleted_messages[channel_id]:
+        return await ctx.send("There are no deleted messages in this channel, lilbro 💀")
+
+    # Patikriname, ar puslapis egzistuoja
+    if index < 1 or index > len(deleted_messages[channel_id]):
+        return await ctx.send(f"Invalid page! Only {len(deleted_messages[channel_id])} messages saved.")
+
+    data = deleted_messages[channel_id][index - 1]
+    
+    embed = discord.Embed(description=data["content"] or "[No Text Content]", color=discord.Color.orange())
+    embed.set_author(name=data["author"], icon_url=data["author_icon"])
+    embed.set_footer(text=f"Message {index}/{len(deleted_messages[channel_id])} • Deleted at {data['time']}")
+    
+    await ctx.send(embed=embed)
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def cs(ctx):
+    """Clear all sniped messages in the channel."""
+    if ctx.channel.id in deleted_messages:
+        deleted_messages[ctx.channel.id] = []
+        await ctx.send("✅ Sniped messages history cleared!")
+    else:
+        await ctx.send("Nothing to clear, lilbro 💀")
 
 # --- GUESSER GAMES ---
 @bot.tree.command(name="guessmap", description="Start an MVSD map guessing game")
