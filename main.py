@@ -169,20 +169,24 @@ class JoinView(discord.ui.View):
             
             await inter.response.send_message("Joined!", ephemeral=True)
             
-            if len(self.players) >= max_players:
-                button.disabled = True
-                embed.color = discord.Color.red()
-                embed.add_field(name="Status", value="🔴 Full / Starting", inline=False)
-                await inter.message.edit(embed=embed, view=self)
-                # Logic to create Thread
-                thread = await inter.message.create_thread(name=f"Match-{league_id}")
-                await thread.send(f"Match is full! Players: " + " ".join([f"<@{p}>" for p in self.players]))
-            else:
-                await inter.message.edit(embed=embed, view=self)
+                   if len(self.players) >= self.max_players:
+            button.disabled = True
+            embed = inter.message.embeds[0]
+            embed.color = discord.Color.red()
+            embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
+            embed.add_field(name="Status", value="🔴 Full / Starting", inline=False)
+            
+            await inter.message.edit(embed=embed, view=self)
+            
+            # Create Private Thread
+            thread = await inter.message.create_thread(name=f"Match-Starting", type=discord.ChannelType.private_thread)
+            await thread.send(f"Match is full! Players: " + " ".join([f"<@{p}>" for p in self.players]))
+        else:
+            embed = inter.message.embeds[0]
+            embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_players}")
+            await inter.message.edit(embed=embed, view=self)
             
             await inter.response.send_message("Joined!", ephemeral=True)
-
-    await interaction.response.send_message(embed=embed, view=JoinView())
 
 @bot.command()
 async def s(ctx, index: int = 1):
