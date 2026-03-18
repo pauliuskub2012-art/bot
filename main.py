@@ -57,56 +57,67 @@ async def hostleague(interaction: discord.Interaction, format: str, region: str)
     embed = discord.Embed(title=f"⚔️ {format} League - {region}", color=discord.Color.blue())
     embed.add_field(name="Players", value=f"1/{max_p}")
     
-    class JoinView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-            self.players = [interaction.user.id]
-            self.thread = None
+    # --- UPDATED LEAGUE VIEW ---
+class JoinView(discord.ui.View):
+    def __init__(self, league_id, max_players, host_id):
+        super().__init__(timeout=None)
+        self.league_id = league_id
+        self.max_players = max_players
+        self.players = [host_id]
+        self.thread = None
 
-        @discord.ui.button(label="Join", style=discord.ButtonStyle.green)
-        async def join(self, inter: discord.Interaction, button: discord.ui.Button):
-            if inter.user.id in self.players: return await inter.response.send_message("Already in!", ephemeral=True)
-            self.players.append(inter.user.id)
-            embed.set_field_at(0, name="Players", value=f"{len(self.players)}/{max_p}")
-            if self.thread is None:
-                self.thread = await inter.message.create_thread(name=f"Match-Thread", type=discord.ChannelType.private_thread)
-                await self.thread.add_user(interaction.user)
-            await self.thread.add_user(inter.user)
-            if len(self.players) >= max_p:
-                button.disabled = True
-                embed.color = discord.Color.red()
-                await inter.message.edit(embed=embed, view=self)
-            else: await inter.message.edit(embed=embed, view=self)
-            await inter.response.send_message("Joined!", ephemeral=True)
+    @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
+    async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+        if inter.user.id in self.players:
+            return await inter.response.send_message("You are already in!", ephemeral=True)
+        
+        self.players.append(inter.user.id)
+        embed = inter.message.embeds[0]
+        
+        # Updating fields to match your image exactly
+        spots_left = self.max_players - len(self.players)
+        embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_players}")
+        embed.set_field_at(5, name="Spots Left", value=f"{spots_left}")
 
-    await interaction.response.send_message(embed=embed, view=JoinView())
+        if len(self.players) >= self.max_players:
+            button.disabled = True
+            embed.color = discord.Color.red()
+            embed.set_field_at(7, name="Status", value="🔴 Full / Starting")
+            await inter.message.edit(embed=embed, view=self)
+        else:
+            await inter.message.edit(embed=embed, view=self)
+        
+        await inter.response.send_message(f"✅ Joined! {spots_left} spots left.", ephemeral=True)
 
-@bot.tree.command(name="endleague", description="End the league and delete thread")
-async def endleague(interaction: discord.Interaction):
-    if isinstance(interaction.channel, discord.Thread):
-        await interaction.response.send_message("Ending league and deleting thread...")
-        await asyncio.sleep(2)
-        await interaction.channel.delete()
-    else: await interaction.response.send_message("Use this inside a league thread!", ephemeral=True)
+# --- UPDATED HOST COMMAND ---
+@bot.tree.command(name="hostleague", description="Host an MVSD League")
+async def hostleague(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
+    max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(format, 2)
+    league_id = random.randint(100000, 999999)
+    now = datetime.datetime.now().strftime("%d %B %Y %H:%M")
 
-# --- PREFIX COMMANDS (.) ---
-@bot.command()
-async def w(ctx, member: discord.Member, *, reason="No reason"):
-    uid = member.id
-    if uid not in warnings: warnings[uid] = []
-    warnings[uid].append(reason)
-    await ctx.send(f"⚠️ {member.mention} warned. Total: {len(warnings[uid])}. Reason: {reason}")
+    embed = discord.Embed(title="🎮 League Hosted", color=discord.Color.dark_grey())
+    embed.description = f"**League ID: {league_id}**"
+    
+    # Row 1 (Matching your image)
+    embed.add_field(name="Match Format", value=f"`{format}`", inline=True)
+    embed.add_field(name="Match Type", value=f"`{type}`", inline=True)
+    embed.add_field(name="Perks", value=f"`{perks}`", inline=True)
+    
+    # Row 2 (Matching your image)
+    embed.add_field(name="Region", value=f"`{region}`", inline=True)
+    embed.add_field(name="Players", value=f"1/{max_p}", inline=True)
+    embed.add_field(name="Spots Left", value=f"{max_p - 1}", inline=True)
+    
+    # Row 3 (Matching your image)
+    embed.add_field(name="Hosted By", value=interaction.user.mention, inline=False)
+    embed.add_field(name="Status", value="🟢 Active", inline=False)
+    embed.add_field(name="Created", value=f"`{now}`", inline=False)
+    
+    embed.set_footer(text=f"League ID: {league_id}")
 
-@bot.command()
-async def unw(ctx, member: discord.Member):
-    if member.id in warnings and warnings[member.id]:
-        warnings[member.id].pop()
-        await ctx.send(f"✅ Removed 1 warn from {member.mention}.")
-
-@bot.command()
-async def p(ctx, member: discord.Member):
-    count = len(warnings.get(member.id, []))
-    await ctx.send(f"👤 {member.display_name} has {count} warns.")
+    view = JoinView(league_id, max_p, interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view)
 
 @bot.command()
 async def k(ctx, member: discord.Member, *, reason="No reason"):
