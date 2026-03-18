@@ -157,6 +157,6 @@ async def s(ctx, index: int = 1):
     embed.set_author(name=data["author"], icon_url=data["author_icon"])
     await ctx.send(embed=embed)
 
-if TOKEN: bot.run(T)
+if TOKEN: bot.run(TOKEN)
 
   
