@@ -88,15 +88,6 @@ class JoinView(discord.ui.View):
         await inter.message.edit(embed=embed, view=self)
         await inter.response.send_message(f"✅ Joined! {spots_left} spots left.", ephemeral=True)
 
-@bot.tree.command(name="hostleague", description="Host an MVSD League")
-async def hostleague(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
-    # ČIA TURI BŪTI TAVO EMBED KODAS (kurį rašėme anksčiau)
-    
-    # Šios eilutės PRIVALO turėti tarpus iš kairės:
-    view = JoinView(league_id, max_p, interaction.user.id)
-    await interaction.response.send_message(embed=embed, view=view)
-
-
 @bot.command()
 async def k(ctx, member: discord.Member, *, reason="No reason"):
     await member.kick(reason=reason)
