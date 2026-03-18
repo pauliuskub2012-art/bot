@@ -89,13 +89,6 @@ class JoinView(discord.ui.View):
         
         await inter.response.send_message(f"✅ Joined! {spots_left} spots left.", ephemeral=True)
 
-# --- UPDATED HOST COMMAND ---
-@bot.tree.command(name="hostleague", description="Host an MVSD League")
-async def hostleague(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
-    max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(format, 2)
-    league_id = random.randint(100000, 999999)
-    now = datetime.datetime.now().strftime("%d %B %Y %H:%M")
-
     embed = discord.Embed(title="🎮 League Hosted", color=discord.Color.dark_grey())
     embed.description = f"**League ID: {league_id}**"
     
