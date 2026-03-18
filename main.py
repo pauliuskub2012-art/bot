@@ -64,7 +64,6 @@ class JoinView(discord.ui.View):
         self.league_id = league_id
         self.max_players = max_players
         self.players = [host_id]
-        self.thread = None
 
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
     async def join(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -74,7 +73,9 @@ class JoinView(discord.ui.View):
         self.players.append(inter.user.id)
         embed = inter.message.embeds[0]
         
-        # Updating fields to match your image exactly
+        # Pataisyta 93 eilutė (naudojame self.league_id ir embeds[0])
+        embed.description = f"**League ID: {self.league_id}**"
+        
         spots_left = self.max_players - len(self.players)
         embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_players}")
         embed.set_field_at(5, name="Spots Left", value=f"{spots_left}")
@@ -83,31 +84,9 @@ class JoinView(discord.ui.View):
             button.disabled = True
             embed.color = discord.Color.red()
             embed.set_field_at(7, name="Status", value="🔴 Full / Starting")
-            await inter.message.edit(embed=embed, view=self)
-        else:
-            await inter.message.edit(embed=embed, view=self)
-        
+            
+        await inter.message.edit(embed=embed, view=self)
         await inter.response.send_message(f"✅ Joined! {spots_left} spots left.", ephemeral=True)
-
-    embed = discord.Embed(title="🎮 League Hosted", color=discord.Color.dark_grey())
-    embed.description = f"**League ID: {league_id}**"
-    
-    # Row 1 (Matching your image)
-    embed.add_field(name="Match Format", value=f"`{format}`", inline=True)
-    embed.add_field(name="Match Type", value=f"`{type}`", inline=True)
-    embed.add_field(name="Perks", value=f"`{perks}`", inline=True)
-    
-    # Row 2 (Matching your image)
-    embed.add_field(name="Region", value=f"`{region}`", inline=True)
-    embed.add_field(name="Players", value=f"1/{max_p}", inline=True)
-    embed.add_field(name="Spots Left", value=f"{max_p - 1}", inline=True)
-    
-    # Row 3 (Matching your image)
-    embed.add_field(name="Hosted By", value=interaction.user.mention, inline=False)
-    embed.add_field(name="Status", value="🟢 Active", inline=False)
-    embed.add_field(name="Created", value=f"`{now}`", inline=False)
-    
-    embed.set_footer(text=f"League ID: {league_id}")
 
 @bot.tree.command(name="hostleague", description="Host an MVSD League")
 async def hostleague(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
