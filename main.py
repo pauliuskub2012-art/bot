@@ -14,13 +14,14 @@ bot = commands.Bot(command_prefix='.', intents=intents)
 
 # --- STORAGE ---
 deleted_messages = {}
-guild_settings = {} # {guild_id: {'staff_role': id, 'jail_role': id}}
-warnings = {} # {user_id: [reasons]}
-active_leagues = {} # {thread_id: league_data}
 
 # --- EVENTS ---
 @bot.event
 async def on_ready():
+    # SET BOT STATUS
+    activity = discord.Activity(type=discord.ActivityType.watching, name="MVSD Leagues")
+    await bot.change_presence(status=discord.Status.online, activity=activity)
+    
     print(f'✅ MVSD Bot online as {bot.user}')
     keep_alive()
     await bot.tree.sync()
@@ -30,40 +31,25 @@ async def on_message_delete(message):
     if message.author.bot: return
     if message.channel.id not in deleted_messages:
         deleted_messages[message.channel.id] = []
-    sniped_data = {"content": message.content, "author": message.author.name, "author_icon": str(message.author.display_avatar.url), "time": datetime.datetime.now().strftime("%H:%M:%S")}
-    deleted_messages[message.channel.id].insert(0, sniped_data)
-    if len(deleted_messages[message.channel.id]) > 20: deleted_messages[message.channel.id].pop()
-
-# --- PERMISSION CHECK ---
-@bot.check
-async def check_permissions(ctx):
-    if ctx.command.name in ['s']: return True # Public command
-    staff_id = guild_settings.get(ctx.guild.id, {}).get('staff_role')
-    if ctx.author.guild_permissions.administrator or (staff_id and discord.utils.get(ctx.author.roles, id=staff_id)):
-        return True
-    await ctx.send("You don't got perms lilbro 💀")
-    return False
-
-# --- SLASH COMMANDS ---
-@bot.tree.command(name="setupcommands", description="Set the staff role")
-@app_commands.checks.has_permissions(administrator=True)
-async def setupcommands(interaction: discord.Interaction, staff_role: discord.Role, jail_role: discord.Role):
-    guild_settings[interaction.guild.id] = {'staff_role': staff_role.id, 'jail_role': jail_role.id}
-    await interaction.response.send_message(f"✅ Setup complete. Staff: {staff_role.name}, Jail Role: {jail_role.name}")
-
-@bot.tree.command(name="hostleague", description="Host MVSD League")
-async def hostleague(interaction: discord.Interaction, format: str, region: str):
-    max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(format, 2)
-    embed = discord.Embed(title=f"⚔️ {format} League - {region}", color=discord.Color.blue())
-    embed.add_field(name="Players", value=f"1/{max_p}")
     
-    # --- UPDATED LEAGUE VIEW ---
+    sniped_data = {
+        "content": message.content,
+        "author": message.author.name,
+        "author_icon": str(message.author.display_avatar.url),
+        "time": datetime.datetime.now().strftime("%H:%M:%S")
+    }
+    deleted_messages[message.channel.id].insert(0, sniped_data)
+    if len(deleted_messages[message.channel.id]) > 20:
+        deleted_messages[message.channel.id].pop()
+
+# --- LEAGUE VIEW (PRIVATE THREADS) ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_players, host_id):
         super().__init__(timeout=None)
         self.league_id = league_id
         self.max_players = max_players
         self.players = [host_id]
+        self.thread = None
 
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
     async def join(self, inter: discord.Interaction, button: discord.ui.Button):
@@ -73,8 +59,18 @@ class JoinView(discord.ui.View):
         self.players.append(inter.user.id)
         embed = inter.message.embeds[0]
         
-        # Pataisyta 93 eilutė (naudojame self.league_id ir embeds[0])
-        embed.description = f"**League ID: {self.league_id}**"
+        # Create Private Thread on first join if not exists
+        if self.thread is None:
+            self.thread = await inter.message.create_thread(
+                name=f"Match-{self.league_id}",
+                type=discord.ChannelType.private_thread
+            )
+            # Add host manually
+            host_user = await bot.fetch_user(self.players[0])
+            await self.thread.add_user(host_user)
+
+        # Add new player to thread
+        await self.thread.add_user(inter.user)
         
         spots_left = self.max_players - len(self.players)
         embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_players}")
@@ -84,59 +80,58 @@ class JoinView(discord.ui.View):
             button.disabled = True
             embed.color = discord.Color.red()
             embed.set_field_at(7, name="Status", value="🔴 Full / Starting")
-            
-        await inter.message.edit(embed=embed, view=self)
-        await inter.response.send_message(f"✅ Joined! {spots_left} spots left.", ephemeral=True)
+            await inter.message.edit(embed=embed, view=self)
+            await self.thread.send(f"**Match is starting!** Players: " + " ".join([f"<@{p}>" for p in self.players]))
+        else:
+            await inter.message.edit(embed=embed, view=self)
+        
+        await inter.response.send_message(f"✅ Joined! Check private thread: {self.thread.mention}", ephemeral=True)
 
-@bot.command()
-async def k(ctx, member: discord.Member, *, reason="No reason"):
-    await member.kick(reason=reason)
-    await ctx.send(f"👢 Kicked {member.display_name}. Reason: {reason}")
+# --- SLASH COMMANDS ---
+@bot.tree.command(name="hostleague", description="Host an MVSD League")
+async def hostleague(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
+    max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(format, 2)
+    league_id = random.randint(100000, 999999)
+    now = datetime.datetime.now().strftime("%d %B %Y %H:%M")
 
-@bot.command()
-async def b(ctx, member: discord.Member, *, reason="No reason"):
-    await member.ban(reason=reason)
-    await ctx.send(f"🔨 Banned {member.display_name}. Reason: {reason}")
+    embed = discord.Embed(title="🎮 League Hosted", color=discord.Color.dark_grey())
+    embed.description = f"**League ID: {league_id}**"
+    embed.add_field(name="Match Format", value=f"`{format}`", inline=True)
+    embed.add_field(name="Match Type", value=f"`{type}`", inline=True)
+    embed.add_field(name="Perks", value=f"`{perks}`", inline=True)
+    embed.add_field(name="Region", value=f"`{region}`", inline=True)
+    embed.add_field(name="Players", value=f"1/{max_p}", inline=True)
+    embed.add_field(name="Spots Left", value=f"{max_p - 1}", inline=True)
+    embed.add_field(name="Hosted By", value=interaction.user.mention, inline=False)
+    embed.add_field(name="Status", value="🟢 Active", inline=False)
+    embed.add_field(name="Created", value=f"`{now}`", inline=False)
+    
+    view = JoinView(league_id, max_p, interaction.user.id)
+    await interaction.response.send_message(embed=embed, view=view)
 
-@bot.command()
-async def r(ctx, member: discord.Member, *, role_name: str):
-    role = discord.utils.find(lambda r: role_name.lower() in r.name.lower(), ctx.guild.roles)
-    if role:
-        if role in member.roles: await member.remove_roles(role)
-        else: await member.add_roles(role)
-        await ctx.send(f"✅ Updated role: {role.name}")
-
-@bot.command()
-async def m(ctx, member: discord.Member, time: str = "10m"):
-    minutes = int(time[:-1]) if 'm' in time else 10
-    await member.timeout(datetime.timedelta(minutes=minutes))
-    await ctx.send(f"🔇 Muted {member.mention} for {time}.")
-
-@bot.command()
-async def jail(ctx, member: discord.Member):
-    role_id = guild_settings.get(ctx.guild.id, {}).get('jail_role')
-    role = ctx.guild.get_role(role_id)
-    if role:
-        await member.add_roles(role)
-        await ctx.send(f"🔒 {member.mention} has been jailed.")
-
-@bot.command()
-async def unjail(ctx, member: discord.Member):
-    role_id = guild_settings.get(ctx.guild.id, {}).get('jail_role')
-    role = ctx.guild.get_role(role_id)
-    if role:
-        await member.remove_roles(role)
-        await ctx.send(f"🔓 {member.mention} has been unjailed.")
-
+# --- PREFIX COMMANDS (.) ---
 @bot.command()
 async def s(ctx, index: int = 1):
-    cid = ctx.channel.id
-    if cid not in deleted_messages or not deleted_messages[cid]: return await ctx.send("Nothing to snipe, lilbro 💀")
-    data = deleted_messages[cid][index-1]
-    embed = discord.Embed(description=data["content"], color=discord.Color.orange())
+    channel_id = ctx.channel.id
+    if channel_id not in deleted_messages or not deleted_messages[channel_id]:
+        return await ctx.send("Nothing to snipe, lilbro 💀")
+    if index < 1 or index > len(deleted_messages[channel_id]):
+        return await ctx.send(f"Invalid page! Only {len(deleted_messages[channel_id])} saved.")
+
+    data = deleted_messages[channel_id][index - 1]
+    embed = discord.Embed(description=data["content"] or "[No Text]", color=discord.Color.orange())
     embed.set_author(name=data["author"], icon_url=data["author_icon"])
+    embed.set_footer(text=f"Message {index}/{len(deleted_messages[channel_id])} • {data['time']}")
     await ctx.send(embed=embed)
 
-if TOKEN: bot.run(TOKEN)
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def cs(ctx):
+    deleted_messages[ctx.channel.id] = []
+    await ctx.send("✅ Sniped messages cleared!")
+
+# --- START ---
+if TOKEN:
+    bot.run(TOKEN)
 
   
