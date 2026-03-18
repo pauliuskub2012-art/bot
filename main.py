@@ -14,6 +14,7 @@ bot = commands.Bot(command_prefix='.', intents=intents)
 
 # --- STORAGE ---
 deleted_messages = {}
+warnings = {} # Saugo įspėjimus: {user_id: [reasons]}
 
 # --- EVENTS ---
 @bot.event
@@ -123,6 +124,60 @@ async def s(ctx, index: int = 1):
     embed.set_author(name=data["author"], icon_url=data["author_icon"])
     embed.set_footer(text=f"Message {index}/{len(deleted_messages[channel_id])} • {data['time']}")
     await ctx.send(embed=embed)
+# --- MODERATION COMMANDS (.) ---
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def p(ctx, amount: int):
+    """Purge messages: .p 10"""
+    deleted = await ctx.channel.purge(limit=amount + 1)
+    await ctx.send(f"🧹 Deleted {len(deleted)-1} messages.", delete_after=3)
+
+@bot.command()
+@commands.has_permissions(kick_members=True)
+async def k(ctx, member: discord.Member, *, reason="No reason"):
+    """Kick: .k @user reason"""
+    await member.kick(reason=reason)
+    await ctx.send(f"👢 Kicked {member.display_name}. Reason: {reason}")
+
+@bot.command()
+@commands.has_permissions(ban_members=True)
+async def b(ctx, member: discord.Member, *, reason="No reason"):
+    """Ban: .b @user reason"""
+    await member.ban(reason=reason)
+    await ctx.send(f"🔨 Banned {member.display_name}. Reason: {reason}")
+
+@bot.command()
+@commands.has_permissions(moderate_members=True)
+async def t(ctx, member: discord.Member, duration: str, *, reason="No reason"):
+    """Timeout/Mute: .t @user 10m reason"""
+    minutes = int(duration[:-1]) if 'm' in duration else 10
+    delta = timedelta(minutes=minutes)
+    await member.timeout(delta, reason=reason)
+    await ctx.send(f"🔇 Muted {member.mention} for {duration}. Reason: {reason}")
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def w(ctx, member: discord.Member, *, reason="No reason"):
+    """Warn: .w @user reason"""
+    if member.id not in warnings: warnings[member.id] = []
+    warnings[member.id].append(reason)
+    await ctx.send(f"⚠️ {member.mention} warned. Total: {len(warnings[member.id])}. Reason: {reason}")
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def unw(ctx, member: discord.Member):
+    """Remove last warn: .unw @user"""
+    if member.id in warnings and warnings[member.id]:
+        warnings[member.id].pop()
+        await ctx.send(f"✅ Removed 1 warn from {member.mention}.")
+
+@bot.command()
+async def warns(ctx, member: discord.Member = None):
+    """Check warns: .warns @user"""
+    member = member or ctx.author
+    count = len(warnings.get(member.id, []))
+    await ctx.send(f"👤 {member.display_name} has {count} warnings.")
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
