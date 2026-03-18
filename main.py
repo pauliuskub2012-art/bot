@@ -5,24 +5,25 @@ import os
 import random
 import asyncio
 import datetime
+from datetime import timedelta
 from keep_alive import keep_alive
 
-# --- CONFIGURATION ---
+# --- KONFIGŪRACIJA ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='.', intents=intents)
 
-# --- STORAGE ---
+# --- SAUGYKLA ---
 deleted_messages = {}
-warnings = {} # Saugo įspėjimus: {user_id: [reasons]}
+warnings = {}
+# Saugo ryšį tarp gijos ID ir pagrindinės žinutės ID: {thread_id: message_id}
+active_leagues = {}
 
-# --- EVENTS ---
+# --- ĮVYKIAI ---
 @bot.event
 async def on_ready():
-    # SET BOT STATUS
     activity = discord.Activity(type=discord.ActivityType.watching, name="MVSD Leagues")
     await bot.change_presence(status=discord.Status.online, activity=activity)
-    
     print(f'✅ MVSD Bot online as {bot.user}')
     keep_alive()
     await bot.tree.sync()
@@ -32,7 +33,6 @@ async def on_message_delete(message):
     if message.author.bot: return
     if message.channel.id not in deleted_messages:
         deleted_messages[message.channel.id] = []
-    
     sniped_data = {
         "content": message.content,
         "author": message.author.name,
@@ -43,7 +43,7 @@ async def on_message_delete(message):
     if len(deleted_messages[message.channel.id]) > 20:
         deleted_messages[message.channel.id].pop()
 
-# --- LEAGUE VIEW (PRIVATE THREADS) ---
+# --- LEAGUE VIEWS ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_players, host_id):
         super().__init__(timeout=None)
@@ -51,26 +51,28 @@ class JoinView(discord.ui.View):
         self.max_players = max_players
         self.players = [host_id]
         self.thread = None
+        self.main_msg = None
 
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
     async def join(self, inter: discord.Interaction, button: discord.ui.Button):
         if inter.user.id in self.players:
-            return await inter.response.send_message("You are already in!", ephemeral=True)
+            return await inter.response.send_message("Tu jau čia!", ephemeral=True)
         
         self.players.append(inter.user.id)
         embed = inter.message.embeds[0]
         
-        # Create Private Thread on first join if not exists
+        # Sukuriame privačią giją pirmo prisijungimo metu
         if self.thread is None:
             self.thread = await inter.message.create_thread(
                 name=f"Match-{self.league_id}",
                 type=discord.ChannelType.private_thread
             )
-            # Add host manually
-            host_user = await bot.fetch_user(self.players[0])
-            await self.thread.add_user(host_user)
+            # Įrašome giją į sekimo sąrašą
+            active_leagues[self.thread.id] = inter.message.id
+            # Pridedame hostą
+            await self.thread.add_user(await inter.guild.fetch_member(self.players[0]))
 
-        # Add new player to thread
+        # Pridedame žaidėją į giją
         await self.thread.add_user(inter.user)
         
         spots_left = self.max_players - len(self.players)
@@ -82,16 +84,34 @@ class JoinView(discord.ui.View):
             embed.color = discord.Color.red()
             embed.set_field_at(7, name="Status", value="🔴 Full / Starting")
             await inter.message.edit(embed=embed, view=self)
-            await self.thread.send(f"**Match is starting!** Players: " + " ".join([f"<@{p}>" for p in self.players]))
+            await self.thread.send(f"**Match Starting!** Players: " + " ".join([f"<@{p}>" for p in self.players]))
         else:
             await inter.message.edit(embed=embed, view=self)
         
-        await inter.response.send_message(f"✅ Joined! Check private thread: {self.thread.mention}", ephemeral=True)
+        await inter.response.send_message(f"✅ Joined! Thread: {self.thread.mention}", ephemeral=True)
 
-# --- SLASH COMMANDS ---
-@bot.tree.command(name="hostleague", description="Host an MVSD League")
-async def hostleague(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
-    max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(format, 2)
+# --- SLASH KOMANDOS ---
+@bot.tree.command(name="leaguehost", description="Host an MVSD League")
+@app_commands.describe(format="Format", type="Swift/War", perks="Perks", region="Region")
+@app_commands.choices(format=[
+    app_commands.Choice(name="2v2", value="2v2"),
+    app_commands.Choice(name="3v3", value="3v3"),
+    app_commands.Choice(name="4v4", value="4v4")
+], type=[
+    app_commands.Choice(name="Swift", value="Swift"),
+    app_commands.Choice(name="War", value="War")
+], perks=[
+    app_commands.Choice(name="Perks", value="Perks"),
+    app_commands.Choice(name="No Perks", value="No Perks")
+], region=[
+    app_commands.Choice(name="EU", value="EU"),
+    app_commands.Choice(name="ASIA", value="ASIA"),
+    app_commands.Choice(name="NA", value="NA"),
+    app_commands.Choice(name="AFRICA", value="AFRICA"),
+    app_commands.Choice(name="AMERICA", value="AMERICA")
+])
+async def leaguehost(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
+    max_p = {"2v2": 4, "3v3": 6, "4v4": 8}.get(format, 4)
     league_id = random.randint(100000, 999999)
     now = datetime.datetime.now().strftime("%d %B %Y %H:%M")
 
@@ -110,83 +130,50 @@ async def hostleague(interaction: discord.Interaction, format: str, type: str, p
     view = JoinView(league_id, max_p, interaction.user.id)
     await interaction.response.send_message(embed=embed, view=view)
 
-# --- PREFIX COMMANDS (.) ---
-@bot.command()
-async def s(ctx, index: int = 1):
-    channel_id = ctx.channel.id
-    if channel_id not in deleted_messages or not deleted_messages[channel_id]:
-        return await ctx.send("Nothing to snipe, lilbro 💀")
-    if index < 1 or index > len(deleted_messages[channel_id]):
-        return await ctx.send(f"Invalid page! Only {len(deleted_messages[channel_id])} saved.")
+@bot.tree.command(name="endleague", description="End the league and close thread")
+async def endleague(interaction: discord.Interaction):
+    if not isinstance(interaction.channel, discord.Thread):
+        return await interaction.response.send_message("Naudok šią komandą match thread'e!", ephemeral=True)
 
-    data = deleted_messages[channel_id][index - 1]
-    embed = discord.Embed(description=data["content"] or "[No Text]", color=discord.Color.orange())
-    embed.set_author(name=data["author"], icon_url=data["author_icon"])
-    embed.set_footer(text=f"Message {index}/{len(deleted_messages[channel_id])} • {data['time']}")
-    await ctx.send(embed=embed)
-# --- MODERATION COMMANDS (.) ---
+    thread_id = interaction.channel.id
+    if thread_id in active_leagues:
+        msg_id = active_leagues[thread_id]
+        try:
+            # Surandame pagrindinę žinutę ir ją redaguojame
+            parent_channel = interaction.channel.parent
+            main_msg = await parent_channel.fetch_message(msg_id)
+            embed = main_msg.embeds[0]
+            embed.color = discord.Color.light_grey()
+            embed.set_field_at(7, name="Status", value="🔴 Ended")
+            
+            # Išjungiame mygtukus
+            await main_msg.edit(embed=embed, view=None)
+            del active_leagues[thread_id]
+        except:
+            print("Nepavyko redaguoti pagrindinės žinutės.")
 
+    await interaction.response.send_message("Lyga baigta. Gija bus ištrinta po 5s.")
+    await asyncio.sleep(5)
+    await interaction.channel.delete()
+
+# --- MODERACIJA (.) ---
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def p(ctx, amount: int):
-    """Purge messages: .p 10"""
+    """Ištrinti žinutes (Purge)"""
     deleted = await ctx.channel.purge(limit=amount + 1)
-    await ctx.send(f"🧹 Deleted {len(deleted)-1} messages.", delete_after=3)
+    await ctx.send(f"🧹 Ištrinta {len(deleted)-1} žinučių.", delete_after=3)
 
 @bot.command()
-@commands.has_permissions(kick_members=True)
-async def k(ctx, member: discord.Member, *, reason="No reason"):
-    """Kick: .k @user reason"""
-    await member.kick(reason=reason)
-    await ctx.send(f"👢 Kicked {member.display_name}. Reason: {reason}")
+async def s(ctx, index: int = 1):
+    """Snipe ištrintas žinutes"""
+    cid = ctx.channel.id
+    if cid not in deleted_messages or not deleted_messages[cid]: return await ctx.send("Nėra ką snipe.")
+    data = deleted_messages[cid][index-1]
+    embed = discord.Embed(description=data["content"] or "[No Text]", color=discord.Color.orange())
+    embed.set_author(name=data["author"], icon_url=data["author_icon"])
+    await ctx.send(embed=embed)
 
-@bot.command()
-@commands.has_permissions(ban_members=True)
-async def b(ctx, member: discord.Member, *, reason="No reason"):
-    """Ban: .b @user reason"""
-    await member.ban(reason=reason)
-    await ctx.send(f"🔨 Banned {member.display_name}. Reason: {reason}")
-
-@bot.command()
-@commands.has_permissions(moderate_members=True)
-async def t(ctx, member: discord.Member, duration: str, *, reason="No reason"):
-    """Timeout/Mute: .t @user 10m reason"""
-    minutes = int(duration[:-1]) if 'm' in duration else 10
-    delta = timedelta(minutes=minutes)
-    await member.timeout(delta, reason=reason)
-    await ctx.send(f"🔇 Muted {member.mention} for {duration}. Reason: {reason}")
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def w(ctx, member: discord.Member, *, reason="No reason"):
-    """Warn: .w @user reason"""
-    if member.id not in warnings: warnings[member.id] = []
-    warnings[member.id].append(reason)
-    await ctx.send(f"⚠️ {member.mention} warned. Total: {len(warnings[member.id])}. Reason: {reason}")
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def unw(ctx, member: discord.Member):
-    """Remove last warn: .unw @user"""
-    if member.id in warnings and warnings[member.id]:
-        warnings[member.id].pop()
-        await ctx.send(f"✅ Removed 1 warn from {member.mention}.")
-
-@bot.command()
-async def warns(ctx, member: discord.Member = None):
-    """Check warns: .warns @user"""
-    member = member or ctx.author
-    count = len(warnings.get(member.id, []))
-    await ctx.send(f"👤 {member.display_name} has {count} warnings.")
-
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def cs(ctx):
-    deleted_messages[ctx.channel.id] = []
-    await ctx.send("✅ Sniped messages cleared!")
-
-# --- START ---
 if TOKEN:
     bot.run(TOKEN)
 
-  
