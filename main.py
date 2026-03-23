@@ -13,6 +13,9 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='.', intents=intents)
 
+# PAKEISK ŠIĄ EILUTĘ:
+@bot.tree.command(name="leaguehost", description="Host an MVSD League")
+
 # --- IMPROVED LEAGUE VIEW (SIDEBAR THREADS) ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_players, host_id):
@@ -96,5 +99,10 @@ if TOKEN:
     bot.run(TOKEN)
 else:
     print("❌ ERROR: DISCORD_TOKEN is missing in Render settings!")
+
+# PAKEISK PORTĄ Į 10000:
+def run():
+    app.run(host='0.0.0.0', port=10000)
+
 
 
