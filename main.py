@@ -1,3 +1,4 @@
+# 1. Pirmiausia visi importai
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -6,6 +7,11 @@ import random
 import asyncio
 import datetime
 from keep_alive import keep_alive
+
+# 2. TAD BŪTINAI SUKURIAME BOTO KINTAMĄJĮ (Šito tau trūksta virš 64 eilutės)
+TOKEN = os.getenv('DISCORD_TOKEN')
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix='.', intents=intents)
 
 # --- IMPROVED LEAGUE VIEW (SIDEBAR THREADS) ---
 class JoinView(discord.ui.View):
