@@ -91,3 +91,10 @@ async def endleague(interaction: discord.Interaction):
     await asyncio.sleep(5)
     await interaction.channel.delete()
 
+if TOKEN:
+    print("🚀 Bot starting...")
+    bot.run(TOKEN)
+else:
+    print("❌ ERROR: DISCORD_TOKEN is missing in Render settings!")
+
+
