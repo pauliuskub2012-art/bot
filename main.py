@@ -1,3 +1,12 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+import os
+import random
+import asyncio
+import datetime
+from keep_alive import keep_alive
+
 # --- IMPROVED LEAGUE VIEW (SIDEBAR THREADS) ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_players, host_id):
