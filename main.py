@@ -24,23 +24,20 @@ class JoinView(discord.ui.View):
         self.league_id = league_id
         self.max_p = max_p
         self.players = [host_id]
-        self.thread = None
+        self.channel = None
 
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
-async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+    async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+        await inter.response.defer(ephemeral=True)
 
-    await inter.response.defer(ephemeral=True)
+        if inter.user.id in self.players:
+            return await inter.followup.send("You are already in!", ephemeral=True)
 
-    if inter.user.id in self.players:
-        return await inter.followup.send("You are already in!", ephemeral=True)
+        self.players.append(inter.user.id)
 
-    self.players.append(inter.user.id)
+        guild = inter.guild
 
-    guild = inter.guild
-
-    # 🏗️ CREATE PRIVATE CHANNEL FIRST TIME
-    if self.channel is None:
-        try:
+        if self.channel is None:
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
                 guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True),
@@ -53,51 +50,16 @@ async def join(self, inter: discord.Interaction, button: discord.ui.Button):
                 overwrites=overwrites
             )
 
-            active_leagues[self.channel.id] = inter.message.id
+            await self.channel.send("Match created!")
 
-            await self.channel.send(
-                f"🏆 **League {self.league_id}**\n"
-                f"Host: <@{self.players[0]}>\n"
-                f"Waiting for players..."
+        else:
+            await self.channel.set_permissions(
+                inter.user,
+                view_channel=True,
+                send_messages=True
             )
 
-        except Exception as e:
-            return await inter.followup.send(f"❌ Error: {e}", ephemeral=True)
-
-    else:
-        # ➕ ADD NEW PLAYER PERMISSION
-        await self.channel.set_permissions(
-            inter.user,
-            view_channel=True,
-            send_messages=True
-        )
-
-    # 📊 UPDATE EMBED
-    embed = inter.message.embeds[0]
-    spots = self.max_p - len(self.players)
-
-    embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_p}")
-    embed.set_field_at(5, name="Spots Left", value=str(spots))
-
-    # 🚀 FULL
-    if len(self.players) >= self.max_p:
-        button.disabled = True
-        embed.color = discord.Color.red()
-        embed.set_field_at(7, name="Status", value="🔴 Full / Starting")
-
-        await inter.message.edit(embed=embed, view=None)
-
-        await self.channel.send(
-            "📢 **MATCH STARTING!**\n" +
-            " ".join([f"<@{p}>" for p in self.players])
-        )
-    else:
-        await inter.message.edit(embed=embed, view=self)
-
-    await inter.followup.send(
-        f"✅ Joined! Go to {self.channel.mention}",
-        ephemeral=True
-    )
+        await inter.followup.send(f"Joined! {self.channel.mention}", ephemeral=True)
 
 # --- PERMISSION CHECK ---
 def is_staff():
