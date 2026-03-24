@@ -18,6 +18,80 @@ active_leagues = {}
 server_settings = {}
 warns = {}
 
+class JoinView(discord.ui.View):
+    def __init__(self, league_id, max_p, host_id):
+        super().__init__(timeout=None)
+        self.league_id = league_id
+        self.max_p = max_p
+        self.players = [host_id]
+        self.thread = None
+
+    @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
+    async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+
+        await inter.response.defer(ephemeral=True)  # 🔥 prevents interaction fail
+
+        if inter.user.id in self.players:
+            return await inter.followup.send("You are already in!", ephemeral=True)
+
+        self.players.append(inter.user.id)
+
+        # 🧵 CREATE THREAD FIRST TIME ONLY
+        if self.thread is None:
+            try:
+                self.thread = await inter.channel.create_thread(
+                    name=f"match-{self.league_id}",
+                    type=discord.ChannelType.private_thread,
+                    auto_archive_duration=60,
+                    invitable=False
+                )
+
+                active_leagues[self.thread.id] = inter.message.id
+
+                # ✅ ADD HOST + FIRST PLAYER
+                await self.thread.add_user(self.players[0])
+                await self.thread.add_user(inter.user)
+
+                await self.thread.send(
+                    f"🏆 **League {self.league_id}**\n"
+                    f"Host: <@{self.players[0]}>\n"
+                    f"Waiting for players..."
+                )
+
+            except Exception as e:
+                return await inter.followup.send(f"❌ Thread error: {e}", ephemeral=True)
+
+        else:
+            # ➕ ADD NEW PLAYER TO EXISTING THREAD
+            try:
+                await self.thread.add_user(inter.user)
+            except Exception as e:
+                return await inter.followup.send(f"❌ Could not add you: {e}", ephemeral=True)
+
+        # 📊 UPDATE EMBED
+        embed = inter.message.embeds[0]
+        spots = self.max_p - len(self.players)
+
+        embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_p}")
+        embed.set_field_at(5, name="Spots Left", value=str(spots))
+
+        # 🚀 MATCH FULL
+        if len(self.players) >= self.max_p:
+            button.disabled = True
+            embed.color = discord.Color.red()
+            embed.set_field_at(7, name="Status", value="🔴 Full / Starting")
+
+            await inter.message.edit(embed=embed, view=None)
+
+            await self.thread.send(
+                "📢 **MATCH STARTING!**\n" +
+                " ".join([f"<@{p}>" for p in self.players])
+            )
+        else:
+            await inter.message.edit(embed=embed, view=self)
+
+        await inter.followup.send("✅ Joined! Check your private thread.", ephemeral=True)
+
 # --- PERMISSION CHECK ---
 def is_staff():
     async def predicate(ctx):
