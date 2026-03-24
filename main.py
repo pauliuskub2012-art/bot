@@ -39,7 +39,7 @@ class JoinView(discord.ui.View):
         # 🧵 CREATE THREAD FIRST TIME ONLY
         if self.thread is None:
             try:
-                self.thread = await inter.channel.create_thread(
+                self.thread = await inter.message.create_thread(
                     name=f"match-{self.league_id}",
                     type=discord.ChannelType.private_thread,
                     auto_archive_duration=60,
