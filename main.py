@@ -15,6 +15,9 @@ bot = commands.Bot(command_prefix='.', intents=intents)
 
 # PAKEISK ŠIĄ EILUTĘ:
 @bot.tree.command(name="leaguehost", description="Host an MVSD League")
+async def leaguehost(interaction: discord.Interaction, format: str, type: str, perks: str, region: str):
+# ^--- ŠITAS ŽODELIS "async" YRA BŪTINAS!
+
 
 # --- IMPROVED LEAGUE VIEW (SIDEBAR THREADS) ---
 class JoinView(discord.ui.View):
