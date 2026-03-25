@@ -14,12 +14,11 @@ bot = commands.Bot(command_prefix='.', intents=intents)
 
 # --- STORAGE ---
 deleted_messages = {}
-active_leagues = {} # {thread_id: main_message_id}
-league_links = {}   # {main_message_id: "server_link"}
-server_settings = {} # {guild_id: {'staff_role': id, 'jail_role': id}}
-warns = {} # {user_id: count}
+league_storage = {} # { "ID123": {"msg_id": 0, "thread_id": 0, "channel_id": 0, "host_id": 0} }
+league_links = {}   
+server_settings = {} # {guild_id: {'staff_role': id, 'jail_role': id, 'host_chan': id, 'res_chan': id, 'host_role': id}}
 
-# --- PERMISSION CHECK ---
+# --- PERMISSION CHECKS ---
 def is_staff():
     async def predicate(ctx):
         settings = server_settings.get(ctx.guild.id, {})
@@ -37,8 +36,8 @@ async def on_ready():
     print(f'✅ {bot.user} is online!')
     keep_alive()
     try:
-        synced = await bot.tree.sync()
-        print(f"🔄 Synced {len(synced)} slash commands.")
+        await bot.tree.sync()
+        print("🔄 Slash commands synced.")
     except Exception as e:
         print(f"❌ Sync error: {e}")
 
@@ -53,7 +52,7 @@ async def on_message_delete(message):
         "icon": str(message.author.display_avatar.url)
     })
 
-# --- LEAGUE VIEW (SIDEBAR THREADS & DM LINK) ---
+# --- LEAGUE VIEW ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_p, host_id):
         super().__init__(timeout=None)
@@ -66,9 +65,8 @@ class JoinView(discord.ui.View):
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
     async def join(self, inter: discord.Interaction, button: discord.ui.Button):
         if inter.user.id in self.players:
-            return await inter.response.send_message("You are already in this league!", ephemeral=True)
+            return await inter.response.send_message("You are already in!", ephemeral=True)
         
-        # Create Private Sidebar Thread if not exists
         if self.thread is None:
             try:
                 self.thread = await inter.channel.create_thread(
@@ -76,25 +74,22 @@ class JoinView(discord.ui.View):
                     type=discord.ChannelType.private_thread,
                     invitational=False
                 )
-                active_leagues[self.thread.id] = inter.message.id
+                if self.league_id in league_storage:
+                    league_storage[self.league_id]["thread_id"] = self.thread.id
                 host_mem = inter.guild.get_member(self.host_id)
                 if host_mem: await self.thread.add_user(host_mem)
-                await self.thread.send(f"🏆 **League ID: {self.league_id}**\nHost: <@{self.host_id}>\nWaiting for players...")
-            except Exception as e:
-                return await inter.response.send_message(f"❌ Error creating thread: {e}", ephemeral=True)
+            except: pass
 
         self.players.append(inter.user.id)
-        await self.thread.add_user(inter.user)
+        if self.thread: await self.thread.add_user(inter.user)
         
-        # Send Private Server Link to Player's DM
         link = league_links.get(inter.message.id, "Host has not provided the link yet.")
         try:
-            await inter.user.send(f"🎮 **League Joined!**\nMatch ID: `{self.league_id}`\nPrivate Server Link: {link}")
+            await inter.user.send(f"🎮 **League Joined!**\nID: `{self.league_id}`\nLink: {link}")
         except discord.Forbidden:
-            await self.thread.send(f"⚠️ <@{inter.user.id}>, I couldn't DM you the link. Please open your DMs!")
+            if self.thread: await self.thread.send(f"⚠️ <@{inter.user.id}>, open DMs for the link!")
 
-        # Update Main Message Embed
-        embed = inter.message.embeds[0]
+        embed = inter.message.embeds
         spots = self.max_p - len(self.players)
         embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_p}")
         embed.set_field_at(5, name="Spots Left", value=str(spots))
@@ -103,24 +98,48 @@ class JoinView(discord.ui.View):
             button.disabled = True
             embed.color = discord.Color.red()
             embed.set_field_at(7, name="Status", value="🔴 Full / Starting")
-            await inter.message.edit(embed=embed, view=None) # Button disappears
-            await self.thread.send(f"📢 **MATCH STARTING!**\nPlayers: " + " ".join([f"<@{p}>" for p in self.players]))
+            await inter.message.edit(embed=embed, view=None)
+            if self.thread: await self.thread.send(f"📢 **STARTING!** Players: " + " ".join([f"<@{p}>" for p in self.players]))
         else:
             await inter.message.edit(embed=embed, view=self)
         
-        await inter.response.send_message(f"✅ Joined! Check your DMs for the link.", ephemeral=True)
+        await inter.response.send_message(f"✅ Joined League `{self.league_id}`!", ephemeral=True)
 
 # --- SLASH COMMANDS ---
-@bot.tree.command(name="leaguehost", description="Host a league and provide a link via DM")
+@bot.tree.command(name="setupleagues", description="Setup hosting channel, results channel, and host role")
+@app_commands.checks.has_permissions(administrator=True)
+async def setupleagues(inter: discord.Interaction, hosting_channel: discord.TextChannel, results_channel: discord.TextChannel, host_role: discord.Role):
+    if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
+    server_settings[inter.guild.id]['host_chan'] = hosting_channel.id
+    server_settings[inter.guild.id]['res_chan'] = results_channel.id
+    server_settings[inter.guild.id]['host_role'] = host_role.id
+    await inter.response.send_message(f"✅ Hosting: {hosting_channel.mention}\n✅ Results: {results_channel.mention}\n✅ Host Role: {host_role.mention}")
+
+@bot.tree.command(name="leaguehost", description="Host a league (Requires Host Role)")
 async def leaguehost(inter: discord.Interaction, format: str, type: str, perks: str, region: str):
+    settings = server_settings.get(inter.guild.id, {})
+    host_chan_id = settings.get('host_chan')
+    host_role_id = settings.get('host_role')
+    
+    # Check for Host Role or Admin
+    if not inter.user.guild_permissions.administrator:
+        if not host_role_id or not discord.utils.get(inter.user.roles, id=host_role_id):
+            return await inter.response.send_message("❌ You do not have the required role to host leagues!", ephemeral=True)
+
+    # Check for Channel
+    if host_chan_id and inter.channel_id != host_chan_id:
+        return await inter.response.send_message(f"❌ You can only host in <#{host_chan_id}>!", ephemeral=True)
+
     max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(format, 4)
-    league_id = random.randint(1000, 9999)
+    chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    league_id = "".join(random.choice(chars) for _ in range(6))
     
     embed = discord.Embed(title=f"🎮 {format} {type} League", color=discord.Color.blue())
-    embed.add_field(name="Format", value=f"`{format}`", inline=True)
-    embed.add_field(name="Type", value=f"`{type}`", inline=True)
-    embed.add_field(name="Perks", value=f"`{perks}`", inline=True)
-    embed.add_field(name="Region", value=f"`{region}`", inline=True)
+    embed.add_field(name="League ID", value=f"**{league_id}**", inline=False)
+    embed.add_field(name="Format", value=format, inline=True)
+    embed.add_field(name="Type", value=type, inline=True)
+    embed.add_field(name="Perks", value=perks, inline=True)
+    embed.add_field(name="Region", value=region, inline=True)
     embed.add_field(name="Players", value=f"1/{max_p}", inline=True)
     embed.add_field(name="Spots Left", value=str(max_p-1), inline=True)
     embed.add_field(name="Host", value=inter.user.mention, inline=False)
@@ -129,120 +148,74 @@ async def leaguehost(inter: discord.Interaction, format: str, type: str, perks: 
     view = JoinView(league_id, max_p, inter.user.id)
     await inter.response.send_message(embed=embed, view=view)
     
-    # DM Request for Private Server Link
     sent_msg = await inter.original_response()
+    league_storage[league_id] = {"msg_id": sent_msg.id, "channel_id": inter.channel_id, "host_id": inter.user.id}
+    
     try:
-        await inter.user.send(f"👋 You are hosting League `{league_id}`. Please **reply to this DM** with the Private Server Link.")
-        
-        def check(m):
-            return m.author.id == inter.user.id and isinstance(m.channel, discord.DMChannel)
-
+        await inter.user.send(f"👋 League `{league_id}`. Reply with the **Server Link**.")
+        def check(m): return m.author.id == inter.user.id and isinstance(m.channel, discord.DMChannel)
         msg = await bot.wait_for('message', check=check, timeout=300.0)
         league_links[sent_msg.id] = msg.content
-        await inter.user.send(f"✅ Link saved! It will be automatically sent to joining players.")
-    except asyncio.TimeoutError:
-        await inter.user.send("⏳ Time is up. You didn't provide a link.")
-    except discord.Forbidden:
-        await inter.channel.send(f"⚠️ {inter.user.mention}, enable your DMs so I can ask for the link!")
+        await inter.user.send(f"✅ Link saved for ID `{league_id}`!")
+    except: pass
 
-@bot.tree.command(name="endleague", description="End the match and delete the thread")
-async def endleague(inter: discord.Interaction):
-    if not isinstance(inter.channel, discord.Thread):
-        return await inter.response.send_message("Use this inside the league thread!", ephemeral=True)
-    
-    if inter.channel.id in active_leagues:
-        try:
-            main_msg = await inter.channel.parent.fetch_message(active_leagues[inter.channel.id])
-            emb = main_msg.embeds[0]
-            emb.color = discord.Color.light_grey()
-            emb.set_field_at(7, name="Status", value="⚪ Ended")
-            await main_msg.edit(embed=emb, view=None)
-        except: pass
-    
-    await inter.response.send_message("League finished. Deleting thread in 5 seconds...")
-    await asyncio.sleep(5)
-    await inter.channel.delete()
+@bot.tree.command(name="endleague", description="End a league using its ID")
+async def endleague(inter: discord.Interaction, id: str):
+    id = id.upper()
+    if id not in league_storage: return await inter.response.send_message(f"❌ ID `{id}` not found!", ephemeral=True)
 
-@bot.tree.command(name="setupcommands", description="Setup staff roles and jail system")
+    data = league_storage[id]
+    channel = bot.get_channel(data["channel_id"])
+    
+    try:
+        main_msg = await channel.fetch_message(data["msg_id"])
+        emb = main_msg.embeds
+        emb.color = discord.Color.light_grey()
+        emb.set_field_at(7, name="Status", value="⚪ Ended")
+        await main_msg.edit(embed=emb, view=None)
+    except: pass
+
+    if "thread_id" in data:
+        thread = channel.get_thread(data["thread_id"])
+        if thread: await thread.delete()
+
+    del league_storage[id]
+    await inter.response.send_message(f"✅ League `{id}` ended.")
+
+@bot.tree.command(name="setupcommands", description="Setup staff and jail roles")
 @app_commands.checks.has_permissions(administrator=True)
 async def setupcommands(inter: discord.Interaction, staff_role: discord.Role, jail_role: discord.Role):
-    server_settings[inter.guild.id] = {'staff_role': staff_role.id, 'jail_role': jail_role.id}
-    await inter.response.send_message(f"✅ Staff set to: {staff_role.name}\n✅ Jail role set to: {jail_role.name}")
+    if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
+    server_settings[inter.guild.id]['staff_role'] = staff_role.id
+    server_settings[inter.guild.id]['jail_role'] = jail_role.id
+    await inter.response.send_message("✅ Roles saved!")
 
-# --- PREFIX COMMANDS (.) ---
+# --- PREFIX COMMANDS ---
 @bot.command()
 @is_staff()
-async def b(ctx, member: discord.Member, *, r="None"):
-    await member.ban(reason=r); await ctx.send(f"✅ Banned {member}")
-
-@bot.command()
-@is_staff()
-async def unb(ctx, user_id: int):
-    await ctx.guild.unban(discord.Object(id=user_id)); await ctx.send(f"✅ Unbanned {user_id}")
+async def b(ctx, m: discord.Member, *, r="None"): await m.ban(reason=r); await ctx.send(f"✅ Banned {m}")
 
 @bot.command()
 @is_staff()
-async def k(ctx, member: discord.Member, *, r="None"):
-    await member.kick(reason=r); await ctx.send(f"✅ Kicked {member}")
+async def t(ctx, m: discord.Member, min: int): await m.timeout(datetime.timedelta(minutes=min)); await ctx.send(f"✅ Muted {m} for {min}m")
 
 @bot.command()
 @is_staff()
-async def t(ctx, m: discord.Member, min: int):
-    await m.timeout(datetime.timedelta(minutes=min)); await ctx.send(f"✅ Timed out {m} for {min}m")
-
-@bot.command()
-@is_staff()
-async def unt(ctx, m: discord.Member):
-    await m.timeout(None); await ctx.send(f"✅ Removed timeout for {m}")
-
-@bot.command()
-@is_staff()
-async def w(ctx, m: discord.Member):
-    warns[m.id] = warns.get(m.id, 0) + 1
-    await ctx.send(f"⚠️ {m.mention} warned! Total: {warns[m.id]}")
-
-@bot.command()
-@is_staff()
-async def unw(ctx, m: discord.Member):
-    warns[m.id] = max(0, warns.get(m.id, 0) - 1)
-    await ctx.send(f"✅ Warning removed for {m.mention}. Total: {warns[m.id]}")
-
-@bot.command()
-@is_staff()
-async def r(ctx, m: discord.Member, role: discord.Role):
-    await m.add_roles(role); await ctx.send(f"✅ Given {role.name} to {m}")
-
-@bot.command()
-@is_staff()
-async def p(ctx, amount: int):
-    await ctx.channel.purge(limit=amount+1)
+async def unt(ctx, m: discord.Member): await m.timeout(None); await ctx.send(f"✅ Removed timeout for {m}")
 
 @bot.command()
 @is_staff()
 async def jail(ctx, m: discord.Member):
     rid = server_settings.get(ctx.guild.id, {}).get('jail_role')
-    if not rid: return await ctx.send("Run `/setupcommands` first!")
-    await m.add_roles(ctx.guild.get_role(rid)); await ctx.send(f"⚖️ Jailed {m.mention}")
-
-@bot.command()
-@is_staff()
-async def unjail(ctx, m: discord.Member):
-    rid = server_settings.get(ctx.guild.id, {}).get('jail_role')
-    await m.remove_roles(ctx.guild.get_role(rid)); await ctx.send(f"🔓 Unjailed {m.mention}")
+    if rid: await m.add_roles(ctx.guild.get_role(rid)); await ctx.send(f"⚖️ Jailed {m.mention}")
 
 @bot.command()
 async def s(ctx, i: int = 1):
     data = deleted_messages.get(ctx.channel.id, [])
-    if not data: return await ctx.send("No snipes available.")
+    if not data: return await ctx.send("No snipes.")
     msg = data[i-1]
-    e = discord.Embed(description=msg['content'] or "[Media]", color=discord.Color.blue())
+    e = discord.Embed(description=msg['content'], color=discord.Color.blue())
     e.set_author(name=msg['author'], icon_url=msg['icon'])
     await ctx.send(embed=e)
-
-@bot.command()
-@is_staff()
-async def cs(ctx):
-    deleted_messages[ctx.channel.id] = []
-    await ctx.send("✅ Snipe history cleared.")
 
 if TOKEN: bot.run(TOKEN)
