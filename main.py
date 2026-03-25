@@ -12,14 +12,14 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='.', intents=intents)
 
-# --- DATABASE (InMemory) ---
-user_stats = {} # {user_id: {'wins': 0, 'played': 0, 'points': 0, 'karma': 100}}
+# --- DATABASE (Simulated) ---
+user_stats = {} # {user_id: {stats}}
 league_storage = {} # {ID: {data}}
 league_links = {} # {msg_id: link}
-server_settings = {} # {guild_id: {staff_role, host_role, jail_role, host_chan, res_chan, rewards: {pts: role_id}}}
+server_settings = {} # {guild_id: {config}}
 deleted_messages = {}
 
-# --- HELPER FUNCTIONS ---
+# --- HELPERS ---
 def get_stats(user_id):
     if user_id not in user_stats:
         user_stats[user_id] = {'wins': 0, 'played': 0, 'points': 0, 'karma': 100}
@@ -43,22 +43,6 @@ def is_staff():
         return ctx.author.guild_permissions.administrator or (staff_role_id and any(r.id == staff_role_id for r in ctx.author.roles))
     return commands.check(predicate)
 
-# --- EVENTS ---
-@bot.event
-async def on_ready():
-    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="MVSD Rankings"))
-    keep_alive()
-    try: await bot.tree.sync()
-    except: pass
-    print(f'✅ {bot.user} is online and ready!')
-
-@bot.event
-async def on_message_delete(message):
-    if message.author.bot: return
-    cid = message.channel.id
-    if cid not in deleted_messages: deleted_messages[cid] = []
-    deleted_messages[cid].insert(0, {"content": message.content, "author": str(message.author), "icon": str(message.author.display_avatar.url)})
-
 # --- LEAGUE VIEW ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_p, host_id):
@@ -75,7 +59,11 @@ class JoinView(discord.ui.View):
         
         if self.thread is None:
             try:
-                self.thread = await inter.channel.create_thread(name=f"match-{self.league_id}", type=discord.ChannelType.private_thread, invitational=False)
+                self.thread = await inter.channel.create_thread(
+                    name=f"match-{self.league_id}",
+                    type=discord.ChannelType.private_thread,
+                    invitational=False
+                )
                 league_storage[self.league_id]["thread_id"] = self.thread.id
                 host_mem = inter.guild.get_member(self.host_id)
                 if host_mem: await self.thread.add_user(host_mem)
@@ -103,103 +91,108 @@ class JoinView(discord.ui.View):
         else:
             await inter.message.edit(embed=embed, view=self)
         
-        await inter.response.send_message(f"✅ Joined! Check DMs.", ephemeral=True)
+        await inter.response.send_message(f"✅ Joined! ID: `{self.league_id}`", ephemeral=True)
         link = league_links.get(inter.message.id, "No link provided.")
-        try: await inter.user.send(f"🎮 League ID: `{self.league_id}`\nServer Link: {link}")
+        try: await inter.user.send(f"🎮 ID: `{self.league_id}`\nLink: {link}")
         except: pass
 
 # --- SLASH COMMANDS ---
 
-@bot.tree.command(name="setupcommands", description="Set Staff and Jail roles")
+@bot.tree.command(name="setupcommands", description="Nustatyti Staff ir Jail roles")
 @app_commands.checks.has_permissions(administrator=True)
 async def setupcommands(inter: discord.Interaction, staff_role: discord.Role, jail_role: discord.Role):
     if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
     server_settings[inter.guild.id].update({'staff_role': staff_role.id, 'jail_role': jail_role.id})
-    await inter.response.send_message(f"✅ Roles saved!")
+    await inter.response.send_message(f"✅ Staff: {staff_role.name}, Jail: {jail_role.name}")
 
-@bot.tree.command(name="setupleague", description="Set channels and host role")
+@bot.tree.command(name="setupleague", description="Nustatyti kanalus ir host role")
 @app_commands.checks.has_permissions(administrator=True)
 async def setupleague(inter: discord.Interaction, hosting_channel: discord.TextChannel, results_channel: discord.TextChannel, host_role: discord.Role):
     if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
     server_settings[inter.guild.id].update({'host_chan': hosting_channel.id, 'res_chan': results_channel.id, 'host_role': host_role.id})
-    await inter.response.send_message(f"✅ League settings updated!")
+    await inter.response.send_message(f"✅ Hosting: {hosting_channel.mention}, Results: {results_channel.mention}")
 
-@bot.tree.command(name="setup_rewards", description="Add auto-role reward for points")
+@bot.tree.command(name="setup_rewards", description="Nustatyti Auto-Role už taškus")
 @app_commands.checks.has_permissions(administrator=True)
 async def setup_rewards(inter: discord.Interaction, points: int, role: discord.Role):
     settings = server_settings.setdefault(inter.guild.id, {})
     rewards = settings.setdefault('rewards', {})
     rewards[points] = role.id
-    await inter.response.send_message(f"✅ Reward set: `{points}` pts -> {role.mention}")
+    await inter.response.send_message(f"✅ Role {role.name} bus duodama pasiekus {points} pts!")
 
-@bot.tree.command(name="hostleague", description="Host a league match")
-async def hostleague(inter: discord.Interaction, format: str, type: str, perks: str, region: str):
+@bot.tree.command(name="hostleague", description="Sukurti lygos mačą")
+@app_commands.describe(format="Pasirinkite formatą")
+@app_commands.choices(format=[
+    app_commands.Choice(name="1v1", value="1v1"),
+    app_commands.Choice(name="2v2", value="2v2"),
+    app_commands.Choice(name="3v3", value="3v3"),
+    app_commands.Choice(name="4v4", value="4v4"),
+])
+async def hostleague(inter: discord.Interaction, format: app_commands.Choice[str], type: str, perks: str, region: str):
     settings = server_settings.get(inter.guild.id, {})
     if not inter.user.guild_permissions.administrator and not any(r.id == settings.get('host_role') for r in inter.user.roles):
-        return await inter.response.send_message("❌ No Host Role!", ephemeral=True)
+        return await inter.response.send_message("❌ Neturite Host rolės!", ephemeral=True)
     if settings.get('host_chan') and inter.channel_id != settings.get('host_chan'):
-        return await inter.response.send_message(f"❌ Host in <#{settings.get('host_chan')}>", ephemeral=True)
+        return await inter.response.send_message(f"❌ Rašykite į <#{settings.get('host_chan')}>", ephemeral=True)
 
-    max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(format, 4)
+    f_val = format.value
+    max_p = {"1v1": 2, "2v2": 4, "3v3": 6, "4v4": 8}.get(f_val, 4)
     l_id = "".join(random.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(6))
     
-    embed = discord.Embed(title=f"🎮 {format} {type} League", color=discord.Color.green())
+    embed = discord.Embed(title=f"🎮 {f_val} {type} League", color=discord.Color.green())
     embed.add_field(name="League ID", value=f"**{l_id}**", inline=False)
-    embed.add_field(name="Format", value=format, inline=True)
-    embed.add_field(name="Type", value=type, inline=True)
-    embed.add_field(name="Perks", value=perks, inline=True)
-    embed.add_field(name="Region", value=region, inline=True)
-    embed.add_field(name="Players", value=f"1/{max_p}", inline=True)
-    embed.add_field(name="Spots Left", value=str(max_p-1), inline=True)
-    embed.add_field(name="Host", value=inter.user.mention, inline=False)
-    embed.add_field(name="Status", value="🟢 Recruiting", inline=False)
+    embed.add_field(name="Format", value=f_val, inline=True); embed.add_field(name="Type", value=type, inline=True)
+    embed.add_field(name="Perks", value=perks, inline=True); embed.add_field(name="Region", value=region, inline=True)
+    embed.add_field(name="Players", value=f"1/{max_p}", inline=True); embed.add_field(name="Spots Left", value=str(max_p-1), inline=True)
+    embed.add_field(name="Host", value=inter.user.mention, inline=False); embed.add_field(name="Status", value="🟢 Recruiting", inline=False)
     
     view = JoinView(l_id, max_p, inter.user.id)
     await inter.response.send_message(embed=embed, view=view)
     msg = await inter.original_response()
-    league_storage[l_id] = {"msg_id": msg.id, "channel_id": inter.channel_id, "host_id": inter.user.id, "status": "Recruiting", "player_list": [inter.user.id], "format": format, "type": type}
+    league_storage[l_id] = {"msg_id": msg.id, "channel_id": inter.channel_id, "host_id": inter.user.id, "status": "Recruiting", "player_list": [inter.user.id], "format": f_val}
     
     try:
-        await inter.user.send(f"👋 ID: `{l_id}`. Reply with Server Link.")
+        await inter.user.send(f"👋 ID: `{l_id}`. Atsiųsk Private Server Link.")
         m = await bot.wait_for('message', check=lambda m: m.author.id == inter.user.id and isinstance(m.channel, discord.DMChannel), timeout=180.0)
         league_links[msg.id] = m.content
-        await inter.user.send("✅ Link saved!")
+        await inter.user.send("✅ Link išsaugotas!")
     except: pass
 
-@bot.tree.command(name="endleague", description="End match and give points")
+@bot.tree.command(name="endleague", description="Užbaigti lygą ir duoti taškus")
 async def endleague(inter: discord.Interaction, id: str, winner_pings: str = None):
     id = id.upper()
-    if id not in league_storage: return await inter.response.send_message("❌ ID not found!", ephemeral=True)
+    if id not in league_storage: return await inter.response.send_message("❌ ID nerastas!", ephemeral=True)
     data = league_storage[id]
     
     if data["status"] == "Ongoing":
+        pts_map = {"1v1": 10, "2v2": 20, "3v3": 30, "4v4": 40}
+        play_pts = pts_map.get(data['format'], 20)
+        
         for p_id in data['player_list']:
-            s = get_stats(p_id)
-            s['played'] += 1; s['points'] += 10
+            s = get_stats(p_id); s['played'] += 1; s['points'] += play_pts
             mem = inter.guild.get_member(p_id)
             if mem: await check_rewards(mem, s['points'])
+
         if winner_pings:
             for p in winner_pings.replace(',', ' ').split():
                 clean = p.strip('<@!> ')
                 if clean.isdigit():
-                    s = get_stats(int(clean)); s['wins'] += 1; s['points'] += 20
+                    s = get_stats(int(clean)); s['wins'] += 1; s['points'] += (play_pts * 2)
                     mem = inter.guild.get_member(int(clean))
                     if mem: await check_rewards(mem, s['points'])
 
-        await inter.response.send_message(f"✅ Match `{id}` ended. Pts awarded! Send screenshot to DM.")
+        await inter.response.send_message(f"✅ Baigta. Pts paskirti! Screenshot prašome į DM.")
         try:
             host = await bot.fetch_user(data["host_id"])
-            await host.send(f"🏆 Match `{id}` screenshot needed.")
+            await host.send(f"🏆 Match `{id}` baigtas. Atsiųsk screenshotą dabar.")
             m = await bot.wait_for('message', check=lambda m: m.author.id == data["host_id"] and m.attachments, timeout=300.0)
             res_chan = bot.get_channel(server_settings[inter.guild.id]['res_chan'])
-            res_emb = discord.Embed(title=f"🏁 Result: {id}", color=discord.Color.blue())
+            res_emb = discord.Embed(title=f"🏁 Rezultatai: {id}", color=discord.Color.blue())
             res_emb.set_image(url=m.attachments[0].url)
-            res_emb.add_field(name="Format", value=data['format'])
-            res_emb.add_field(name="Players", value=" ".join([f"<@{p}>" for p in data['player_list']]))
-            await res_chan.send(content="Match Finished!", embed=res_emb)
+            await res_chan.send(content="Match Results!", embed=res_emb)
         except: pass
     else:
-        await inter.response.send_message(f"❌ Cancelled.")
+        await inter.response.send_message(f"❌ Atšaukta (nepilna).")
 
     try:
         chan = bot.get_channel(data["channel_id"])
@@ -208,36 +201,31 @@ async def endleague(inter: discord.Interaction, id: str, winner_pings: str = Non
         await msg.edit(embed=emb, view=None)
     except: pass
     if "thread_id" in data:
-        t = bot.get_channel(data["thread_id"])
+        t = bot.get_channel(data["thread_id"]); 
         if t: await t.delete()
     del league_storage[id]
 
-@bot.tree.command(name="profile", description="Check player profile")
+@bot.tree.command(name="profile", description="Žaidėjo statistika")
 async def profile(inter: discord.Interaction, member: discord.Member = None):
     target = member or inter.user
     s = get_stats(target.id)
-    emb = discord.Embed(title=f"📊 {target.name}", color=discord.Color.gold())
-    emb.add_field(name="Points", value=s['points'], inline=True)
-    emb.add_field(name="Wins", value=s['wins'], inline=True)
-    emb.add_field(name="Karma", value=s['karma'], inline=True)
-    await inter.response.send_message(embed=emb)
+    emb = discord.Embed(title=f"📊 {target.name}", color=discord.Color.blue())
+    emb.add_field(name="Points", value=s['points']); emb.add_field(name="Wins", value=s['wins'])
+    emb.add_field(name="Karma", value=s['karma']); await inter.response.send_message(embed=emb)
 
-@bot.tree.command(name="leaderboard", description="Top 10 players")
+@bot.tree.command(name="leaderboard", description="Top 10")
 async def leaderboard(inter: discord.Interaction):
     sorted_users = sorted(user_stats.items(), key=lambda x: x[1]['points'], reverse=True)[:10]
     desc = "\n".join([f"**{i+1}.** <@{u}> - {s['points']} pts" for i, (u, s) in enumerate(sorted_users)])
-    emb = discord.Embed(title="🏆 Leaderboard", description=desc or "Empty", color=discord.Color.blue())
-    await inter.response.send_message(embed=emb)
+    await inter.response.send_message(embed=discord.Embed(title="🏆 Leaderboard", description=desc or "Tuščia", color=discord.Color.gold()))
 
-@bot.tree.command(name="whisper", description="DM a player through the bot")
+@bot.tree.command(name="whisper", description="Nusiųsti DM žaidėjui")
 async def whisper(inter: discord.Interaction, player: discord.Member, message: str):
-    if not inter.user.guild_permissions.administrator: return await inter.response.send_message("No permission", ephemeral=True)
-    try:
-        await player.send(f"📩 **Host Message:** {message}")
-        await inter.response.send_message(f"✅ Sent to {player.name}", ephemeral=True)
-    except: await inter.response.send_message("❌ DMs closed", ephemeral=True)
+    if not inter.user.guild_permissions.administrator: return await inter.response.send_message("No perm")
+    try: await player.send(f"📩 **Message:** {message}"); await inter.response.send_message("✅")
+    except: await inter.response.send_message("❌ DM uždaryti")
 
-# --- PREFIX MODERATION ---
+# --- PREFIX COMMANDS (.) ---
 @bot.command()
 @is_staff()
 async def b(ctx, m: discord.Member, *, r="None"): await m.ban(reason=r); await ctx.send(f"✅ Banned {m}")
@@ -268,7 +256,15 @@ async def r(ctx, m: discord.Member, role: discord.Role): await m.add_roles(role)
 async def s(ctx, i: int = 1):
     data = deleted_messages.get(ctx.channel.id, [])
     if not data: return await ctx.send("No snipes.")
-    msg = data[i-1]; e = discord.Embed(description=msg['content'], color=discord.Color.blue())
+    msg = data[i-1]; e = discord.Embed(description=msg['content'], color=discord.Color.red())
     e.set_author(name=msg['author'], icon_url=msg['icon']); await ctx.send(embed=e)
+
+# --- START ---
+@bot.event
+async def on_ready():
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="MVSD Rankings"))
+    keep_alive()
+    await bot.tree.sync()
+    print(f'✅ {bot.user} is online!')
 
 if TOKEN: bot.run(TOKEN)
