@@ -45,7 +45,7 @@ async def on_message_delete(message):
     if cid not in deleted_messages: deleted_messages[cid] = []
     deleted_messages[cid].insert(0, {"content": message.content, "author": str(message.author), "icon": str(message.author.display_avatar.url)})
 
-# --- LEAGUE VIEW ---
+# --- LEAGUE VIEW (FIXED COUNTER & LOGIC) ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_p, host_id):
         super().__init__(timeout=None)
@@ -57,9 +57,14 @@ class JoinView(discord.ui.View):
 
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
     async def join(self, inter: discord.Interaction, button: discord.ui.Button):
+        # 1. Check if already in
         if inter.user.id in self.players:
-            return await inter.response.send_message("You are already in!", ephemeral=True)
+            return await inter.response.send_message("You are already in this league!", ephemeral=True)
         
+        # 2. Add player immediately
+        self.players.append(inter.user.id)
+        
+        # 3. Update Sidebar Thread
         if self.thread is None:
             try:
                 self.thread = await inter.channel.create_thread(
@@ -73,17 +78,15 @@ class JoinView(discord.ui.View):
                 if host_mem: await self.thread.add_user(host_mem)
             except: pass
 
-        self.players.append(inter.user.id)
-        if self.thread: await self.thread.add_user(inter.user)
+        if self.thread:
+            await self.thread.add_user(inter.user)
         
+        # 4. Update Global Storage
         if self.league_id in league_storage:
             league_storage[self.league_id]["player_list"] = self.players
 
-        link = league_links.get(inter.message.id, "Link not provided by host yet.")
-        try: await inter.user.send(f"🎮 **Joined League `{self.league_id}`!**\nServer Link: {link}")
-        except: pass
-
-        embed = inter.message.embeds
+        # 5. Update Main Message (Counter and Status)
+        embed = inter.message.embeds[0]
         spots = self.max_p - len(self.players)
         embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_p}")
         embed.set_field_at(5, name="Spots Left", value=str(spots))
@@ -94,11 +97,20 @@ class JoinView(discord.ui.View):
             embed.set_field_at(7, name="Status", value="🟠 Ongoing / In Progress")
             league_storage[self.league_id]["status"] = "Ongoing"
             await inter.message.edit(embed=embed, view=None)
-            if self.thread: await self.thread.send(f"📢 **MATCH STARTED!** Participants: " + " ".join([f"<@{p}>" for p in self.players]))
+            if self.thread:
+                await self.thread.send(f"📢 **MATCH STARTED!** Participants: " + " ".join([f"<@{p}>" for p in self.players]))
         else:
             await inter.message.edit(embed=embed, view=self)
         
-        await inter.response.send_message(f"✅ Joined League `{self.league_id}`!", ephemeral=True)
+        await inter.response.send_message(f"✅ Joined! ID: `{self.league_id}`", ephemeral=True)
+
+        # 6. Send Link to DM
+        link = league_links.get(inter.message.id, "Host has not provided the link yet.")
+        try:
+            await inter.user.send(f"🎮 **League Joined!**\nID: `{self.league_id}`\nServer Link: {link}")
+        except:
+            if self.thread:
+                await self.thread.send(f"⚠️ <@{inter.user.id}>, open your DMs for the link!")
 
 # --- SLASH COMMANDS ---
 @bot.tree.command(name="setupcommands", description="Setup staff and jail roles")
@@ -109,7 +121,7 @@ async def setupcommands(inter: discord.Interaction, staff_role: discord.Role, ja
     server_settings[inter.guild.id]['jail_role'] = jail_role.id
     await inter.response.send_message(f"✅ Staff Role: {staff_role.mention}\n✅ Jail Role: {jail_role.mention}")
 
-@bot.tree.command(name="setupleagues", description="Setup hosting, results, and host role")
+@bot.tree.command(name="setupleagues", description="Setup channels and host role")
 @app_commands.checks.has_permissions(administrator=True)
 async def setupleagues(inter: discord.Interaction, hosting_channel: discord.TextChannel, results_channel: discord.TextChannel, host_role: discord.Role):
     if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
@@ -158,7 +170,7 @@ async def leaguehost(inter: discord.Interaction, format: str, type: str, perks: 
         await inter.user.send("✅ Link saved!")
     except: pass
 
-@bot.tree.command(name="endleague", description="End match via ID")
+@bot.tree.command(name="endleague", description="End match and post results")
 async def endleague(inter: discord.Interaction, id: str):
     id = id.upper()
     if id not in league_storage: return await inter.response.send_message("❌ ID not found!", ephemeral=True)
@@ -166,37 +178,36 @@ async def endleague(inter: discord.Interaction, id: str):
     data = league_storage[id]
     channel = bot.get_channel(data["channel_id"])
     main_msg = await channel.fetch_message(data["msg_id"])
-    emb = main_msg.embeds
+    emb = main_msg.embeds[0]
 
     if data["status"] == "Recruiting":
         emb.color = discord.Color.red()
-        emb.set_field_at(7, name="Status", value="❌ Cancelled (Not enough players)")
+        emb.set_field_at(7, name="Status", value="❌ Cancelled (Not full)")
         await main_msg.edit(embed=emb, view=None)
         await inter.response.send_message(f"🚫 League `{id}` cancelled.")
     else:
         emb.color = discord.Color.light_grey()
         emb.set_field_at(7, name="Status", value="⚪ Ended")
         await main_msg.edit(embed=emb, view=None)
-        await inter.response.send_message(f"✅ Ending match `{id}`. Check your DMs for results upload.")
+        await inter.response.send_message(f"✅ Ending match `{id}`. Sending DM for screenshots...")
 
         try:
             host_user = await bot.fetch_user(data["host_id"])
-            await host_user.send(f"🏆 **Match `{id}` Finished!**\nPlease send the screenshot now.")
+            await host_user.send(f"🏆 **Match `{id}` Finished!**\nPlease send a screenshot of the results now.")
             
             def check(m): return m.author.id == data["host_id"] and isinstance(m.channel, discord.DMChannel) and len(m.attachments) > 0
             msg = await bot.wait_for('message', check=check, timeout=300.0)
             
-            screenshot_url = msg.attachments.url
             res_chan_id = server_settings.get(inter.guild.id, {}).get('res_chan')
             if res_chan_id:
                 res_chan = bot.get_channel(res_chan_id)
-                res_emb = discord.Embed(title=f"🏁 Match Results: {id}", color=discord.Color.blue())
-                res_emb.set_image(url=screenshot_url)
+                res_emb = discord.Embed(title=f"🏁 Results for ID: {id}", color=discord.Color.blue())
+                res_emb.set_image(url=msg.attachments[0].url)
                 res_emb.add_field(name="Players", value=" ".join([f"<@{p}>" for p in data['player_list']]))
                 await res_chan.send(content=" ".join([f"<@{p}>" for p in data['player_list']]), embed=res_emb)
-                await host_user.send("✅ Results posted successfully!")
+                await host_user.send("✅ Results posted!")
         except Exception as e:
-            print(f"DM Error: {e}")
+            print(f"Result error: {e}")
 
     if "thread_id" in data:
         thread = bot.get_channel(data["thread_id"])
