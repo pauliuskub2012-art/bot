@@ -72,17 +72,28 @@ class JoinView(discord.ui.View):
         self.players.append(inter.user.id)
         league_storage[self.league_id]["player_list"] = self.players
 
-        # DM link
+        # --- BEAUTIFUL DM ---
         link = league_links.get(inter.message.id, "No link yet")
+        embed = discord.Embed(
+            title=f"👋 League Joined!",
+            description=f"You have successfully joined the league **{self.league_id}**",
+            color=0x00FFAA,
+            timestamp=datetime.datetime.utcnow()
+        )
+        embed.add_field(name="League ID", value=f"`{self.league_id}`", inline=True)
+        embed.add_field(name="Server Link", value=f"[Click here to join the server]({link})", inline=True)
+        embed.set_footer(text="Good luck & have fun! 🎮")
+        embed.set_thumbnail(url="https://i.imgur.com/4M7IWwP.png")  # optional thumbnail
+
         try:
-            await inter.user.send(f"🎮 `{self.league_id}`\n{link}")
+            await inter.user.send(embed=embed)
         except:
             pass
 
-        embed = inter.message.embeds[0]
-        embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_p}")
-
-        await inter.message.edit(embed=embed, view=self)
+        # --- UPDATE MESSAGE ---
+        embed_msg = inter.message.embeds[0]
+        embed_msg.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_p}")
+        await inter.message.edit(embed=embed_msg, view=self)
         await inter.response.send_message("Joined!", ephemeral=True)
 
 # --- COMMANDS ---
