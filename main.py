@@ -45,7 +45,7 @@ async def on_message_delete(message):
     if cid not in deleted_messages: deleted_messages[cid] = []
     deleted_messages[cid].insert(0, {"content": message.content, "author": str(message.author), "icon": str(message.author.display_avatar.url)})
 
-# --- LEAGUE VIEW (FIXED COUNTER & LOGIC) ---
+# --- LEAGUE VIEW ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_p, host_id):
         super().__init__(timeout=None)
@@ -57,14 +57,11 @@ class JoinView(discord.ui.View):
 
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
     async def join(self, inter: discord.Interaction, button: discord.ui.Button):
-        # 1. Check if already in
         if inter.user.id in self.players:
-            return await inter.response.send_message("You are already in this league!", ephemeral=True)
+            return await inter.response.send_message("You are already in!", ephemeral=True)
         
-        # 2. Add player immediately
         self.players.append(inter.user.id)
         
-        # 3. Update Sidebar Thread
         if self.thread is None:
             try:
                 self.thread = await inter.channel.create_thread(
@@ -81,11 +78,16 @@ class JoinView(discord.ui.View):
         if self.thread:
             await self.thread.add_user(inter.user)
         
-        # 4. Update Global Storage
         if self.league_id in league_storage:
             league_storage[self.league_id]["player_list"] = self.players
 
-        # 5. Update Main Message (Counter and Status)
+        # --- DM HOST ABOUT NEW PLAYER ---
+        try:
+            host_user = await bot.fetch_user(self.host_id)
+            await host_user.send(f"🔔 **New Player!** `{inter.user}` has joined your league `{self.league_id}`.")
+        except: pass
+
+        # Update Main Message
         embed = inter.message.embeds[0]
         spots = self.max_p - len(self.players)
         embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_p}")
@@ -102,24 +104,38 @@ class JoinView(discord.ui.View):
         else:
             await inter.message.edit(embed=embed, view=self)
         
-        await inter.response.send_message(f"✅ Joined! ID: `{self.league_id}`", ephemeral=True)
+        await inter.response.send_message(f"✅ Joined! Check your DMs.", ephemeral=True)
 
-        # 6. Send Link to DM
+        # Send Link to DM
         link = league_links.get(inter.message.id, "Host has not provided the link yet.")
-        try:
-            await inter.user.send(f"🎮 **League Joined!**\nID: `{self.league_id}`\nServer Link: {link}")
-        except:
-            if self.thread:
-                await self.thread.send(f"⚠️ <@{inter.user.id}>, open your DMs for the link!")
+        try: await inter.user.send(f"🎮 **League Joined!**\nID: `{self.league_id}`\nLink: {link}")
+        except: pass
 
 # --- SLASH COMMANDS ---
+@bot.tree.command(name="whisper", description="Send a private DM to a player through the bot")
+async def whisper(inter: discord.Interaction, player: discord.Member, message: str):
+    # Only League Hosts or Staff can use this
+    settings = server_settings.get(inter.guild.id, {})
+    is_host_role = any(role.id == settings.get('host_role') for role in inter.user.roles)
+    
+    if not inter.user.guild_permissions.administrator and not is_host_role:
+        return await inter.response.send_message("❌ Only League Hosts can use whisper!", ephemeral=True)
+
+    try:
+        embed = discord.Embed(title="📩 Private Message from League Host", description=message, color=discord.Color.gold())
+        embed.set_footer(text="Do not reply to this bot.")
+        await player.send(embed=embed)
+        await inter.response.send_message(f"✅ Whisper sent to {player.mention}", ephemeral=True)
+    except discord.Forbidden:
+        await inter.response.send_message(f"❌ Could not send DM to {player.mention}. Their DMs are closed.", ephemeral=True)
+
 @bot.tree.command(name="setupcommands", description="Setup staff and jail roles")
 @app_commands.checks.has_permissions(administrator=True)
 async def setupcommands(inter: discord.Interaction, staff_role: discord.Role, jail_role: discord.Role):
     if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
     server_settings[inter.guild.id]['staff_role'] = staff_role.id
     server_settings[inter.guild.id]['jail_role'] = jail_role.id
-    await inter.response.send_message(f"✅ Staff Role: {staff_role.mention}\n✅ Jail Role: {jail_role.mention}")
+    await inter.response.send_message(f"✅ Roles configured!", ephemeral=True)
 
 @bot.tree.command(name="setupleagues", description="Setup channels and host role")
 @app_commands.checks.has_permissions(administrator=True)
@@ -128,7 +144,7 @@ async def setupleagues(inter: discord.Interaction, hosting_channel: discord.Text
     server_settings[inter.guild.id]['host_chan'] = hosting_channel.id
     server_settings[inter.guild.id]['res_chan'] = results_channel.id
     server_settings[inter.guild.id]['host_role'] = host_role.id
-    await inter.response.send_message("✅ League settings saved!")
+    await inter.response.send_message("✅ League settings saved!", ephemeral=True)
 
 @bot.tree.command(name="leaguehost", description="Host a league")
 async def leaguehost(inter: discord.Interaction, format: str, type: str, perks: str, region: str):
@@ -182,37 +198,32 @@ async def endleague(inter: discord.Interaction, id: str):
 
     if data["status"] == "Recruiting":
         emb.color = discord.Color.red()
-        emb.set_field_at(7, name="Status", value="❌ Cancelled (Not full)")
+        emb.set_field_at(7, name="Status", value="❌ Cancelled")
         await main_msg.edit(embed=emb, view=None)
         await inter.response.send_message(f"🚫 League `{id}` cancelled.")
     else:
         emb.color = discord.Color.light_grey()
         emb.set_field_at(7, name="Status", value="⚪ Ended")
         await main_msg.edit(embed=emb, view=None)
-        await inter.response.send_message(f"✅ Ending match `{id}`. Sending DM for screenshots...")
+        await inter.response.send_message(f"✅ Ending match `{id}`. Send screenshot to DMs.")
 
         try:
             host_user = await bot.fetch_user(data["host_id"])
-            await host_user.send(f"🏆 **Match `{id}` Finished!**\nPlease send a screenshot of the results now.")
-            
-            def check(m): return m.author.id == data["host_id"] and isinstance(m.channel, discord.DMChannel) and len(m.attachments) > 0
-            msg = await bot.wait_for('message', check=check, timeout=300.0)
+            await host_user.send(f"🏆 **Match `{id}` Finished!** Send the result screenshot.")
+            msg = await bot.wait_for('message', check=lambda m: m.author.id == data["host_id"] and m.attachments, timeout=300.0)
             
             res_chan_id = server_settings.get(inter.guild.id, {}).get('res_chan')
             if res_chan_id:
                 res_chan = bot.get_channel(res_chan_id)
-                res_emb = discord.Embed(title=f"🏁 Results for ID: {id}", color=discord.Color.blue())
+                res_emb = discord.Embed(title=f"🏁 Results: {id}", color=discord.Color.blue())
                 res_emb.set_image(url=msg.attachments[0].url)
                 res_emb.add_field(name="Players", value=" ".join([f"<@{p}>" for p in data['player_list']]))
                 await res_chan.send(content=" ".join([f"<@{p}>" for p in data['player_list']]), embed=res_emb)
-                await host_user.send("✅ Results posted!")
-        except Exception as e:
-            print(f"Result error: {e}")
+        except: pass
 
     if "thread_id" in data:
         thread = bot.get_channel(data["thread_id"])
         if thread: await thread.delete()
-    
     del league_storage[id]
 
 # --- PREFIX COMMANDS ---
