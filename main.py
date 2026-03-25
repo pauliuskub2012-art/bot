@@ -8,11 +8,11 @@ import datetime
 from keep_alive import keep_alive
 
 # --- SETTINGS ---
-FREEZE_PRICE = 150
+FREEZE_PRICE = 500
 DAILY_GOAL = 2
 DAILY_COINS = 50
 DAILY_MMR = 20
-WORK_COOLDOWN = 1800 
+WORK_COOLDOWN = 5000 
 
 # --- BOT SETUP ---
 TOKEN = os.getenv('DISCORD_TOKEN')
