@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
 import os, random, asyncio, datetime
 from keep_alive import keep_alive
 
@@ -24,11 +24,10 @@ def get_stats(uid):
         user_stats[uid] = {
             "coins": 100,
             "mmr": 1000,
-            "streak": 0,
+            "wins": 0,
             "freeze": False,
             "insurance": False,
-            "booster": False,
-            "wins": 0
+            "booster": False
         }
     return user_stats[uid]
 
@@ -56,7 +55,7 @@ class ShopView(discord.ui.View):
     @discord.ui.button(label="Booster 🔥")
     async def booster(self, i, b): await self.buy(i, "booster", 500)
 
-# --- JOIN ---
+# --- JOIN VIEW ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id, max_p, host_id):
         super().__init__(timeout=None)
@@ -73,54 +72,56 @@ class JoinView(discord.ui.View):
         self.players.append(inter.user.id)
         league_storage[self.league_id]["player_list"] = self.players
 
-        # DM player link
+        # DM link
         link = league_links.get(inter.message.id, "No link yet")
-        try: await inter.user.send(f"🎮 `{self.league_id}`\n{link}")
-        except: pass
+        try:
+            await inter.user.send(f"🎮 `{self.league_id}`\n{link}")
+        except:
+            pass
 
         embed = inter.message.embeds[0]
-        embed.set_field_at(5, name="Players", value=f"{len(self.players)}/{self.max_p}")
+        embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_p}")
 
         await inter.message.edit(embed=embed, view=self)
         await inter.response.send_message("Joined!", ephemeral=True)
 
 # --- COMMANDS ---
 
-@bot.tree.command(name="shop")
+@bot.tree.command(name="shop", description="Open shop to buy items")
 async def shop(inter):
     s = get_stats(inter.user.id)
     await inter.response.send_message(
-        embed=discord.Embed(title="Shop", description=f"Coins: {s['coins']}"),
+        embed=discord.Embed(title="🛒 Shop", description=f"Coins: {s['coins']}"),
         view=ShopView()
     )
 
-@bot.tree.command(name="work")
+@bot.tree.command(name="work", description="Earn coins (cooldown applies)")
 async def work(inter):
     uid = inter.user.id
     now = datetime.datetime.now().timestamp()
 
     if uid in last_work and now - last_work[uid] < 1800:
-        return await inter.response.send_message("⏳ Wait", ephemeral=True)
+        return await inter.response.send_message("⏳ Wait before working again", ephemeral=True)
 
     earn = random.randint(25, 75)
     get_stats(uid)["coins"] += earn
     last_work[uid] = now
 
-    await inter.response.send_message(f"💼 Earned {earn}")
+    await inter.response.send_message(f"💼 Earned {earn} coins")
 
-@bot.tree.command(name="profile")
+@bot.tree.command(name="profile", description="View stats")
 async def profile(inter, user: discord.Member = None):
     user = user or inter.user
     s = get_stats(user.id)
 
-    embed = discord.Embed(title=f"{user.name}")
+    embed = discord.Embed(title=f"{user.name}'s Profile")
     embed.add_field(name="Coins", value=s["coins"])
     embed.add_field(name="MMR", value=s["mmr"])
     embed.add_field(name="Wins", value=s["wins"])
 
     await inter.response.send_message(embed=embed)
 
-@bot.tree.command(name="leaderboard")
+@bot.tree.command(name="leaderboard", description="Top players by MMR")
 async def leaderboard(inter):
     top = sorted(user_stats.items(), key=lambda x: x[1]["mmr"], reverse=True)[:10]
     desc = ""
@@ -129,9 +130,9 @@ async def leaderboard(inter):
         user = await bot.fetch_user(uid)
         desc += f"{i}. {user.name} - {data['mmr']}\n"
 
-    await inter.response.send_message(embed=discord.Embed(title="Leaderboard", description=desc))
+    await inter.response.send_message(embed=discord.Embed(title="🏆 Leaderboard", description=desc))
 
-@bot.tree.command(name="leaguehost")
+@bot.tree.command(name="leaguehost", description="Host a league")
 async def leaguehost(inter, format: str):
     max_p = {"1v1":2,"2v2":4,"3v3":6,"4v4":8}.get(format, 4)
     league_id = "".join(random.choice("ABC123XYZ") for _ in range(6))
@@ -151,29 +152,16 @@ async def leaguehost(inter, format: str):
         "player_list": [inter.user.id]
     }
 
-    # DM for link
     try:
         await inter.user.send(f"Send link for `{league_id}`")
-        dm = await bot.wait_for('message',
+        dm = await bot.wait_for("message",
             check=lambda m: m.author == inter.user and isinstance(m.channel, discord.DMChannel),
             timeout=120)
         league_links[msg.id] = dm.content
-    except: pass
+    except:
+        pass
 
-@bot.tree.command(name="bet")
-async def bet(inter, league_id: str, amount: int):
-    s = get_stats(inter.user.id)
-    if s["coins"] < amount:
-        return await inter.response.send_message("No coins", ephemeral=True)
-
-    bets.setdefault(league_id, {})
-    bets[league_id][inter.user.id] = amount
-    s["coins"] -= amount
-
-    await inter.response.send_message("Bet placed")
-
-# --- END LEAGUE WITH SCREENSHOTS ---
-@bot.tree.command(name="endleague")
+@bot.tree.command(name="endleague", description="End league and upload screenshots")
 async def endleague(inter):
     await inter.response.send_message("Send League ID", ephemeral=True)
 
@@ -184,55 +172,48 @@ async def endleague(inter):
         return await inter.followup.send("Not found")
 
     data = league_storage[league_id]
-
-    # ASK FOR SCREENSHOTS
     host = await bot.fetch_user(data["host_id"])
-    await host.send(f"📸 Send screenshots for `{league_id}` (multiple allowed)")
+
+    await host.send(f"📸 Send screenshots for `{league_id}` (send multiple, then stop)")
 
     screenshots = []
-
     try:
         while True:
-            m = await bot.wait_for(
-                "message",
-                timeout=120,
-                check=lambda x: x.author.id == data["host_id"]
-            )
+            m = await bot.wait_for("message", timeout=120, check=lambda x: x.author.id == data["host_id"])
             if m.attachments:
                 screenshots.extend(m.attachments)
             else:
                 break
-    except asyncio.TimeoutError:
+    except:
         pass
 
-    # SEND TO RESULT CHANNEL
-    res_chan_id = server_settings.get(inter.guild.id, {}).get("res_chan")
-    if res_chan_id:
-        chan = bot.get_channel(res_chan_id)
-
+    # send to results channel
+    chan_id = server_settings.get(inter.guild.id, {}).get("res_chan")
+    if chan_id:
+        chan = bot.get_channel(chan_id)
         for att in screenshots:
-            emb = discord.Embed(title=f"📊 {league_id} Result")
+            emb = discord.Embed(title=f"{league_id} Result")
             emb.set_image(url=att.url)
             await chan.send(embed=emb)
 
-    # UPDATE STATS
+    # rewards + MVP tracking
     for p in data["player_list"]:
         s = get_stats(p)
         s["wins"] += 1
+        s["coins"] += 20
+        s["mmr"] += 10
         weekly_activity[p] = weekly_activity.get(p, 0) + 1
 
     del league_storage[league_id]
-
     await inter.followup.send("League ended + results posted")
 
-# --- MVP SYSTEM ---
-@bot.tree.command(name="mvpsetup")
+@bot.tree.command(name="mvpsetup", description="Set MVP channel")
 async def mvpsetup(inter, channel: discord.TextChannel):
     server_settings.setdefault(inter.guild.id, {})
     server_settings[inter.guild.id]["mvp_chan"] = channel.id
     await inter.response.send_message("MVP channel set", ephemeral=True)
 
-@bot.tree.command(name="mvpannounce")
+@bot.tree.command(name="mvpannounce", description="Announce MVP")
 async def mvpannounce(inter):
     if not weekly_activity:
         return await inter.response.send_message("No data")
@@ -248,18 +229,49 @@ async def mvpannounce(inter):
     weekly_activity.clear()
     await inter.response.send_message("MVP announced")
 
-# --- SETUP ---
-@bot.tree.command(name="setupleagues")
+@bot.tree.command(name="setupleagues", description="Set results channel")
 async def setupleagues(inter, results_channel: discord.TextChannel):
     server_settings.setdefault(inter.guild.id, {})
     server_settings[inter.guild.id]["res_chan"] = results_channel.id
     await inter.response.send_message("Setup done")
 
+# --- ALIVE CHAT SYSTEM ---
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    await bot.process_commands(message)
+
+    # 🔥 REPLY WHEN PINGED
+    if bot.user in message.mentions:
+        content = message.content.replace(f"<@{bot.user.id}>", "").strip()
+
+        if not content:
+            reply = "👀 You called?"
+        else:
+            reply = content.capitalize()
+
+        await message.reply(reply)
+        return
+
+    # 🎲 RANDOM CHAT (5%)
+    if random.randint(1, 100) <= 5:
+        await message.channel.send(random.choice([
+            "👀 I'm watching...",
+            "🎮 Queue up!",
+            "💰 Try /work",
+            "🏆 Someone farming wins?"
+        ]))
+
 # --- READY ---
 @bot.event
 async def on_ready():
     keep_alive()
+    await bot.change_presence(
+        activity=discord.Activity(type=discord.ActivityType.listening, name="My boss vJ")
+    )
     await bot.tree.sync()
-    print("Bot Ready")
+    print("Bot is alive.")
 
 bot.run(TOKEN)
