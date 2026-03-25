@@ -76,15 +76,14 @@ class JoinView(discord.ui.View):
         self.players.append(inter.user.id)
         if self.thread: await self.thread.add_user(inter.user)
         
-        # Update storage player list
         if self.league_id in league_storage:
             league_storage[self.league_id]["player_list"] = self.players
 
-        link = league_links.get(inter.message.id, "No link provided.")
+        link = league_links.get(inter.message.id, "Link not provided by host yet.")
         try: await inter.user.send(f"🎮 **Joined League `{self.league_id}`!**\nServer Link: {link}")
         except: pass
 
-        embed = inter.message.embeds[0]
+        embed = inter.message.embeds
         spots = self.max_p - len(self.players)
         embed.set_field_at(4, name="Players", value=f"{len(self.players)}/{self.max_p}")
         embed.set_field_at(5, name="Spots Left", value=str(spots))
@@ -102,13 +101,24 @@ class JoinView(discord.ui.View):
         await inter.response.send_message(f"✅ Joined League `{self.league_id}`!", ephemeral=True)
 
 # --- SLASH COMMANDS ---
-@bot.tree.command(name="setupleagues")
+@bot.tree.command(name="setupcommands", description="Setup staff and jail roles")
+@app_commands.checks.has_permissions(administrator=True)
+async def setupcommands(inter: discord.Interaction, staff_role: discord.Role, jail_role: discord.Role):
+    if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
+    server_settings[inter.guild.id]['staff_role'] = staff_role.id
+    server_settings[inter.guild.id]['jail_role'] = jail_role.id
+    await inter.response.send_message(f"✅ Staff Role: {staff_role.mention}\n✅ Jail Role: {jail_role.mention}")
+
+@bot.tree.command(name="setupleagues", description="Setup hosting, results, and host role")
 @app_commands.checks.has_permissions(administrator=True)
 async def setupleagues(inter: discord.Interaction, hosting_channel: discord.TextChannel, results_channel: discord.TextChannel, host_role: discord.Role):
-    server_settings[inter.guild.id] = {'host_chan': hosting_channel.id, 'res_chan': results_channel.id, 'host_role': host_role.id}
-    await inter.response.send_message("✅ Settings Saved!")
+    if inter.guild.id not in server_settings: server_settings[inter.guild.id] = {}
+    server_settings[inter.guild.id]['host_chan'] = hosting_channel.id
+    server_settings[inter.guild.id]['res_chan'] = results_channel.id
+    server_settings[inter.guild.id]['host_role'] = host_role.id
+    await inter.response.send_message("✅ League settings saved!")
 
-@bot.tree.command(name="leaguehost")
+@bot.tree.command(name="leaguehost", description="Host a league")
 async def leaguehost(inter: discord.Interaction, format: str, type: str, perks: str, region: str):
     settings = server_settings.get(inter.guild.id, {})
     if not inter.user.guild_permissions.administrator:
@@ -148,7 +158,7 @@ async def leaguehost(inter: discord.Interaction, format: str, type: str, perks: 
         await inter.user.send("✅ Link saved!")
     except: pass
 
-@bot.tree.command(name="endleague")
+@bot.tree.command(name="endleague", description="End match via ID")
 async def endleague(inter: discord.Interaction, id: str):
     id = id.upper()
     if id not in league_storage: return await inter.response.send_message("❌ ID not found!", ephemeral=True)
@@ -156,40 +166,37 @@ async def endleague(inter: discord.Interaction, id: str):
     data = league_storage[id]
     channel = bot.get_channel(data["channel_id"])
     main_msg = await channel.fetch_message(data["msg_id"])
-    emb = main_msg.embeds[0]
+    emb = main_msg.embeds
 
-    # CASE 1: CANCELLED (Not full)
     if data["status"] == "Recruiting":
         emb.color = discord.Color.red()
-        emb.set_field_at(7, name="Status", value="❌ Cancelled (Not Enough Players)")
+        emb.set_field_at(7, name="Status", value="❌ Cancelled (Not enough players)")
         await main_msg.edit(embed=emb, view=None)
         await inter.response.send_message(f"🚫 League `{id}` cancelled.")
-    
-    # CASE 2: ENDED (Match was played)
     else:
         emb.color = discord.Color.light_grey()
         emb.set_field_at(7, name="Status", value="⚪ Ended")
         await main_msg.edit(embed=emb, view=None)
         await inter.response.send_message(f"✅ Ending match `{id}`. Check your DMs for results upload.")
 
-        # DM Host for Screenshots
         try:
             host_user = await bot.fetch_user(data["host_id"])
-            await host_user.send(f"🏆 **Match `{id}` Finished!**\nPlease send a screenshot of the final score (Round Results).")
+            await host_user.send(f"🏆 **Match `{id}` Finished!**\nPlease send the screenshot now.")
             
-            def check(m): return m.author.id == data["host_id"] and isinstance(m.channel, discord.DMChannel) and m.attachments
+            def check(m): return m.author.id == data["host_id"] and isinstance(m.channel, discord.DMChannel) and len(m.attachments) > 0
             msg = await bot.wait_for('message', check=check, timeout=300.0)
             
+            screenshot_url = msg.attachments.url
             res_chan_id = server_settings.get(inter.guild.id, {}).get('res_chan')
             if res_chan_id:
                 res_chan = bot.get_channel(res_chan_id)
-                res_emb = discord.Embed(title=f"🏁 Results: {data['format']} {data['type']}", color=discord.Color.blue())
-                res_emb.set_image(url=msg.attachments[0].url)
-                res_emb.add_field(name="ID", value=id)
-                res_emb.add_field(name="Participants", value=" ".join([f"<@{p}>" for p in data['player_list']]))
+                res_emb = discord.Embed(title=f"🏁 Match Results: {id}", color=discord.Color.blue())
+                res_emb.set_image(url=screenshot_url)
+                res_emb.add_field(name="Players", value=" ".join([f"<@{p}>" for p in data['player_list']]))
                 await res_chan.send(content=" ".join([f"<@{p}>" for p in data['player_list']]), embed=res_emb)
-                await host_user.send("✅ Results posted to the channel!")
-        except: pass
+                await host_user.send("✅ Results posted successfully!")
+        except Exception as e:
+            print(f"DM Error: {e}")
 
     if "thread_id" in data:
         thread = bot.get_channel(data["thread_id"])
