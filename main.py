@@ -86,7 +86,6 @@ class JoinView(discord.ui.View):
         await inter.response.send_message("Joined!", ephemeral=True)
 
 # --- COMMANDS ---
-
 @bot.tree.command(name="shop", description="Open shop to buy items")
 async def shop(inter):
     s = get_stats(inter.user.id)
@@ -132,14 +131,41 @@ async def leaderboard(inter):
 
     await inter.response.send_message(embed=discord.Embed(title="🏆 Leaderboard", description=desc))
 
+# --- LEAGUE HOSTING ---
 @bot.tree.command(name="leaguehost", description="Host a league")
-async def leaguehost(inter, format: str):
-    max_p = {"1v1":2,"2v2":4,"3v3":6,"4v4":8}.get(format, 4)
-    league_id = "".join(random.choice("ABC123XYZ") for _ in range(6))
+@app_commands.describe(
+    format="Choose league format: 1v1-4v4",
+    perks="Allow perks? Yes/No",
+    region="Select region: NA/EU/ASIA/AFRICA/USA",
+    match_type="Pick match type: Swift/War"
+)
+async def leaguehost(inter, 
+                     format: str, 
+                     perks: bool, 
+                     region: str, 
+                     match_type: str):
+    formats = {"1v1":2, "2v2":4, "3v3":6, "4v4":8}
+    regions = ["NA", "EU", "ASIA", "AFRICA", "USA"]
+    types = ["Swift", "War"]
 
-    embed = discord.Embed(title=f"{format} League")
-    embed.add_field(name="League ID", value=league_id)
-    embed.add_field(name="Players", value=f"1/{max_p}")
+    if format.lower() not in formats:
+        return await inter.response.send_message("Invalid format! Choose 1v1-4v4.", ephemeral=True)
+    if region.upper() not in regions:
+        return await inter.response.send_message("Invalid region!", ephemeral=True)
+    if match_type.capitalize() not in types:
+        return await inter.response.send_message("Invalid match type!", ephemeral=True)
+
+    max_p = formats[format.lower()]
+    league_id = "".join(random.choice("ABC123XYZ") for _ in range(6))
+    color = 0xFF0000 if perks else 0x808080  # Red if perks, gray otherwise
+
+    embed = discord.Embed(
+        title=f"{format.upper()} League - {match_type.capitalize()} - {'Perks' if perks else 'No Perks'}",
+        color=color
+    )
+    embed.add_field(name="League ID", value=league_id, inline=True)
+    embed.add_field(name="Players", value=f"1/{max_p}", inline=True)
+    embed.add_field(name="Region", value=region.upper(), inline=True)
 
     view = JoinView(league_id, max_p, inter.user.id)
     await inter.response.send_message(embed=embed, view=view)
@@ -149,7 +175,10 @@ async def leaguehost(inter, format: str):
         "msg_id": msg.id,
         "channel_id": inter.channel_id,
         "host_id": inter.user.id,
-        "player_list": [inter.user.id]
+        "player_list": [inter.user.id],
+        "perks": perks,
+        "region": region.upper(),
+        "type": match_type.capitalize()
     }
 
     try:
@@ -161,19 +190,21 @@ async def leaguehost(inter, format: str):
     except:
         pass
 
+# --- END LEAGUE ---
 @bot.tree.command(name="endleague", description="End league and upload screenshots")
 async def endleague(inter):
     await inter.response.send_message("Send League ID", ephemeral=True)
-
-    msg = await bot.wait_for("message", check=lambda m: m.author == inter.user, timeout=60)
-    league_id = msg.content.upper()
+    try:
+        msg = await bot.wait_for("message", check=lambda m: m.author == inter.user, timeout=60)
+        league_id = msg.content.upper()
+    except:
+        return await inter.followup.send("Timeout")
 
     if league_id not in league_storage:
         return await inter.followup.send("Not found")
 
     data = league_storage[league_id]
     host = await bot.fetch_user(data["host_id"])
-
     await host.send(f"📸 Send screenshots for `{league_id}` (send multiple, then stop)")
 
     screenshots = []
@@ -187,7 +218,6 @@ async def endleague(inter):
     except:
         pass
 
-    # send to results channel
     chan_id = server_settings.get(inter.guild.id, {}).get("res_chan")
     if chan_id:
         chan = bot.get_channel(chan_id)
@@ -207,6 +237,7 @@ async def endleague(inter):
     del league_storage[league_id]
     await inter.followup.send("League ended + results posted")
 
+# --- MVP ---
 @bot.tree.command(name="mvpsetup", description="Set MVP channel")
 async def mvpsetup(inter, channel: discord.TextChannel):
     server_settings.setdefault(inter.guild.id, {})
@@ -217,15 +248,12 @@ async def mvpsetup(inter, channel: discord.TextChannel):
 async def mvpannounce(inter):
     if not weekly_activity:
         return await inter.response.send_message("No data")
-
     mvp = max(weekly_activity, key=weekly_activity.get)
     user = await bot.fetch_user(mvp)
-
     chan_id = server_settings.get(inter.guild.id, {}).get("mvp_chan")
     if chan_id:
         chan = bot.get_channel(chan_id)
         await chan.send(f"🌟 MVP: {user.mention} with {weekly_activity[mvp]} wins!")
-
     weekly_activity.clear()
     await inter.response.send_message("MVP announced")
 
@@ -240,18 +268,12 @@ async def setupleagues(inter, results_channel: discord.TextChannel):
 async def on_message(message):
     if message.author.bot:
         return
-
     await bot.process_commands(message)
 
     # 🔥 REPLY WHEN PINGED
     if bot.user in message.mentions:
         content = message.content.replace(f"<@{bot.user.id}>", "").strip()
-
-        if not content:
-            reply = "👀 You called?"
-        else:
-            reply = content.capitalize()
-
+        reply = "👀 You called?" if not content else content.capitalize()
         await message.reply(reply)
         return
 
