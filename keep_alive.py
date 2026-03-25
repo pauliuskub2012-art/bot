@@ -5,11 +5,13 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is on 24/7!"
+    return "I'm alive"
 
 def run():
-    app.run(host='0.0.0.0', port=8080)
+    # Render reikalauja porto 10000 arba 8080
+    app.run(host='0.0.0.0', port=10000)
 
 def keep_alive():
     t = Thread(target=run)
     t.start()
+
