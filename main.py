@@ -25,40 +25,43 @@ async def no_perm(ctx):
 # --- LOGGING ---
 async def log_action(guild, message, title="Log"):
     chan_id = server_settings.get(guild.id, {}).get("logs")
-    if chan_id:
-        channel = guild.get_channel(chan_id)
-        if channel:
-            embed = discord.Embed(
-                title=title,
-                description=message,
-                color=discord.Color.blurple(),
-                timestamp=datetime.datetime.utcnow()
-            )
-            await channel.send(embed=embed)
+    if not chan_id:
+        return
 
-# --- SETUP COMMANDS ---
-@bot.command(help="Set logs channel")
+    channel = guild.get_channel(chan_id)
+    if not channel:
+        return
+
+    embed = discord.Embed(
+        title=f"📌 {title}",
+        description=message,
+        color=discord.Color.blue(),
+        timestamp=datetime.datetime.utcnow()
+    )
+
+    await channel.send(embed=embed)
+
+# --- SETUP COMMANDS (FIXED) ---
+@bot.command()
+@commands.has_permissions(manage_guild=True)
 async def setup_logs(ctx, channel: discord.TextChannel):
-    if not has_perm(ctx, "manage_guild"):
-        return await no_perm(ctx)
+    server_settings.setdefault(ctx.guild.id, {})
+    server_settings[ctx.guild.id]["logs"] = channel.id
+    await ctx.send(f"✅ Logs channel set to {channel.mention}")
 
-    server_settings.setdefault(ctx.guild.id, {})["logs"] = channel.id
-    await ctx.send(f"📜 Logs channel set to {channel.mention}")
-
-@bot.command(help="Set jail role")
+@bot.command()
+@commands.has_permissions(manage_guild=True)
 async def setup_jail(ctx, role: discord.Role):
-    if not has_perm(ctx, "manage_guild"):
-        return await no_perm(ctx)
-
-    server_settings.setdefault(ctx.guild.id, {})["jail"] = role.id
-    await ctx.send(f"🚔 Jail role set to {role.mention}")
+    server_settings.setdefault(ctx.guild.id, {})
+    server_settings[ctx.guild.id]["jail"] = role.id
+    await ctx.send(f"✅ Jail role set to {role.mention}")
 
 def get_jail_role(guild):
     role_id = server_settings.get(guild.id, {}).get("jail")
     return guild.get_role(role_id) if role_id else None
 
 # --- JAIL ---
-@bot.command(help="Jail a user")
+@bot.command()
 async def jail(ctx, member: discord.Member):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
@@ -72,7 +75,7 @@ async def jail(ctx, member: discord.Member):
     await log_action(ctx.guild, f"{ctx.author} jailed {member}", "Jail")
 
 # --- WARN SYSTEM (FIXED) ---
-@bot.command(help="Warn a user")
+@bot.command()
 async def w(ctx, member: discord.Member, *, reason="No reason"):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
@@ -82,7 +85,7 @@ async def w(ctx, member: discord.Member, *, reason="No reason"):
     await ctx.send(f"⚠️ {member.mention} warned ({len(warns[member.id])})")
     await log_action(ctx.guild, f"{ctx.author} warned {member} | {reason}", "Warn")
 
-@bot.command(help="Remove a warn")
+@bot.command()
 async def unw(ctx, member: discord.Member):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
@@ -93,7 +96,7 @@ async def unw(ctx, member: discord.Member):
     warns[member.id].pop()
     await ctx.send(f"✅ Warn removed ({len(warns.get(member.id, []))})")
 
-@bot.command(help="Check warns")
+@bot.command(name="warns")
 async def warns_cmd(ctx, member: discord.Member):
     user_warns = warns.get(member.id, [])
     if not user_warns:
@@ -102,14 +105,14 @@ async def warns_cmd(ctx, member: discord.Member):
     msg = "\n".join([f"{i+1}. {w}" for i, w in enumerate(user_warns)])
     await ctx.send(f"⚠️ Warns for {member}:\n{msg}")
 
-# --- RANK SYSTEM ---
-@bot.tree.command(name="ranksetup", description="Set channel for PR rank messages")
+# --- RANK SYSTEM (FIXED SWITCHING) ---
+@bot.tree.command(name="ranksetup", description="Set channel for PR ranking system")
 async def ranksetup(inter: discord.Interaction, channel: discord.TextChannel):
     if not inter.user.guild_permissions.manage_guild:
         return await inter.response.send_message("❌ No permission", ephemeral=True)
 
     server_settings.setdefault(inter.guild.id, {})["rank_channel"] = channel.id
-    await inter.response.send_message("✅ Rank system set", ephemeral=True)
+    await inter.response.send_message("✅ Rank system configured", ephemeral=True)
 
 @bot.event
 async def on_message(message):
@@ -130,7 +133,6 @@ async def on_message(message):
         return
 
     rank = int(match.group(1))
-
     new_role = None
     pr_roles = []
 
@@ -146,10 +148,12 @@ async def on_message(message):
     if not new_role:
         return
 
+    # REMOVE OLD PR ROLES
     remove_roles = [r for r in member.roles if r in pr_roles]
     if remove_roles:
         await member.remove_roles(*remove_roles)
 
+    # ADD NEW
     await member.add_roles(new_role)
 
 # --- LEAGUE SETUP ---
@@ -161,7 +165,38 @@ async def leaguesetup(inter: discord.Interaction, role: discord.Role):
     server_settings.setdefault(inter.guild.id, {})["league_role"] = role.id
     await inter.response.send_message(f"✅ League role set to {role.mention}", ephemeral=True)
 
-# --- LEAGUE VIEW ---
+# --- EMBED UPDATE (PROFESSIONAL + FIXED STATUS) ---
+async def update_embed(guild, league_id):
+    league = league_storage[league_id]
+    msg = league["msg"]
+
+    current = len(league["players"])
+    max_p = league["max"]
+
+    if league["status"] == "ended":
+        status = "🔴 Ended"
+    elif current >= max_p:
+        status = "🔴 Full"
+    else:
+        status = "🟢 Looking"
+
+    embed = discord.Embed(
+        title="🎮 League Lobby",
+        color=discord.Color.dark_green()
+    )
+
+    embed.add_field(name="🆔 League ID", value=f"`{league_id}` {status}", inline=False)
+    embed.add_field(name="👥 Players", value=f"{current}/{max_p}", inline=True)
+    embed.add_field(name="🌍 Region", value=league["region"], inline=True)
+    embed.add_field(name="⚔️ Match Type", value=league["match_type"], inline=True)
+    embed.add_field(name="✨ Perks", value=league["perks"], inline=True)
+    embed.add_field(name="🔗 Access", value="Sent via DM 📩", inline=False)
+
+    embed.set_footer(text="Click the button below to join")
+
+    await msg.edit(embed=embed)
+
+# --- JOIN BUTTON ---
 class JoinView(discord.ui.View):
     def __init__(self, league_id):
         super().__init__(timeout=None)
@@ -172,7 +207,7 @@ class JoinView(discord.ui.View):
         league = league_storage[self.league_id]
 
         if league["status"] == "ended":
-            return await inter.response.send_message("🔴 Ended", ephemeral=True)
+            return await inter.response.send_message("🔴 League ended", ephemeral=True)
 
         if inter.user.id in league["players"]:
             return await inter.response.send_message("Already joined", ephemeral=True)
@@ -180,10 +215,15 @@ class JoinView(discord.ui.View):
         if len(league["players"]) >= league["max"]:
             league["status"] = "full"
             await update_embed(inter.guild, self.league_id)
-            return await inter.response.send_message("🔴 Full", ephemeral=True)
+            return await inter.response.send_message("🔴 League full", ephemeral=True)
 
         league["players"].append(inter.user.id)
-        league["status"] = "ongoing" if len(league["players"]) < league["max"] else "full"
+
+        # FIXED STATUS LOGIC
+        if len(league["players"]) >= league["max"]:
+            league["status"] = "full"
+        else:
+            league["status"] = "looking"
 
         await update_embed(inter.guild, self.league_id)
 
@@ -192,37 +232,16 @@ class JoinView(discord.ui.View):
         except:
             pass
 
-        await inter.response.send_message("✅ Joined! Check DMs", ephemeral=True)
-
-# --- UPDATE EMBED ---
-async def update_embed(guild, league_id):
-    league = league_storage[league_id]
-    msg = league["msg"]
-
-    status = {
-        "looking":"🟢 Looking",
-        "ongoing":"🟠 Ongoing",
-        "full":"🔴 Full",
-        "ended":"🔴 Ended"
-    }[league["status"]]
-
-    embed = discord.Embed(title=f"{league['format']} | {league['match_type']}", color=discord.Color.green())
-    embed.add_field(name="ID", value=f"{league_id} {status}")
-    embed.add_field(name="Players", value=f"{len(league['players'])}/{league['max']}")
-    embed.add_field(name="Region", value=league["region"])
-    embed.add_field(name="Perks", value=league["perks"])
-    embed.add_field(name="Link", value="🔒 DM only")
-
-    await msg.edit(embed=embed)
+        await inter.response.send_message("✅ Joined! Check your DMs", ephemeral=True)
 
 # --- LEAGUE HOST ---
-@bot.tree.command(name="leaguehost", description="Host a league")
+@bot.tree.command(name="leaguehost", description="Create a new league lobby")
 @app_commands.describe(
-    format="Choose format (1v1, 2v2, etc)",
+    format="1v1 / 2v2 / 3v3 / 4v4",
     perks="Enable perks?",
-    match_type="Type of match",
-    region="Server region",
-    link="Match link"
+    match_type="Ranked / Casual / Tournament",
+    region="EU / NA / etc",
+    link="Private match link"
 )
 async def leaguehost(inter: discord.Interaction, format: str, perks: bool, match_type: str, region: str, link: str):
 
@@ -232,14 +251,14 @@ async def leaguehost(inter: discord.Interaction, format: str, perks: bool, match
     if role_id:
         role = inter.guild.get_role(role_id)
         if role not in inter.user.roles:
-            return await inter.response.send_message("❌ No permission", ephemeral=True)
+            return await inter.response.send_message("❌ You cannot host leagues", ephemeral=True)
 
     formats = {"1v1":2,"2v2":4,"3v3":6,"4v4":8}
     if format not in formats:
         return await inter.response.send_message("❌ Invalid format", ephemeral=True)
 
     league_id = "".join(random.choice("ABC123XYZ") for _ in range(6))
-    msg = await inter.channel.send("Creating league...")
+    msg = await inter.channel.send("⚙️ Creating league...")
 
     league_storage[league_id] = {
         "players":[inter.user.id],
@@ -248,7 +267,7 @@ async def leaguehost(inter: discord.Interaction, format: str, perks: bool, match
         "format":format,
         "match_type":match_type,
         "region":region,
-        "perks":"Yes" if perks else "No",
+        "perks":"Enabled" if perks else "Disabled",
         "link":link,
         "msg":msg
     }
@@ -256,17 +275,17 @@ async def leaguehost(inter: discord.Interaction, format: str, perks: bool, match
     await update_embed(inter.guild, league_id)
     await msg.edit(view=JoinView(league_id))
 
-    await inter.response.send_message(f"✅ League {league_id} created", ephemeral=True)
+    await inter.response.send_message(f"✅ League `{league_id}` created", ephemeral=True)
 
-# --- END ---
+# --- END LEAGUE ---
 @bot.tree.command(name="endleague", description="End a league")
 async def endleague(inter: discord.Interaction, league_id: str):
     league = league_storage.get(league_id.upper())
     if not league:
-        return await inter.response.send_message("❌ Not found", ephemeral=True)
+        return await inter.response.send_message("❌ League not found", ephemeral=True)
 
     league["status"] = "ended"
-    await update_embed(inter.guild, league_id)
+    await update_embed(inter.guild, league_id.upper())
 
     await inter.response.send_message("🏁 League ended")
 
@@ -274,7 +293,15 @@ async def endleague(inter: discord.Interaction, league_id: str):
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print("Bot ready")
+
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.listening,
+            name="my boss vJ"
+        )
+    )
+
+    print(f"✅ Logged in as {bot.user}")
 
 keep_alive()
 bot.run(TOKEN)
