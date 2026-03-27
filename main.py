@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import os, random, datetime, asyncio
+from keep_alive import keep_alive
 
 TOKEN = os.getenv("TOKEN")
 
