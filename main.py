@@ -30,12 +30,54 @@ def get_stats(uid):
         }
     return user_stats[uid]
 
-# --- PERM CHECK ---
+# --- PERMS ---
 def has_perm(ctx, perm):
     return getattr(ctx.author.guild_permissions, perm)
 
 async def no_perm(ctx):
     await ctx.send("🚫 No perms lil bro 😭")
+
+# --- LOG SYSTEM ---
+def log_action(guild, msg):
+    chan_id = server_settings.get(guild.id, {}).get("logs")
+    if chan_id:
+        channel = bot.get_channel(chan_id)
+        if channel:
+            asyncio.create_task(channel.send(msg))
+
+# --- AUTO SETUP LOGS ---
+@bot.command()
+async def setup_logs(ctx):
+    if not has_perm(ctx, "manage_guild"):
+        return await no_perm(ctx)
+
+    channel = await ctx.guild.create_text_channel("bot-logs")
+
+    server_settings.setdefault(ctx.guild.id, {})
+    server_settings[ctx.guild.id]["logs"] = channel.id
+
+    await ctx.send(f"📜 Logs created: {channel.mention}")
+
+# --- AUTO SETUP JAIL ---
+@bot.command()
+async def setup_jail(ctx):
+    if not has_perm(ctx, "manage_roles"):
+        return await no_perm(ctx)
+
+    role = await ctx.guild.create_role(name="Jailed")
+
+    overwrites = {
+        ctx.guild.default_role: discord.PermissionOverwrite(send_messages=False),
+        role: discord.PermissionOverwrite(send_messages=True)
+    }
+
+    channel = await ctx.guild.create_text_channel("jail", overwrites=overwrites)
+
+    server_settings.setdefault(ctx.guild.id, {})
+    server_settings[ctx.guild.id]["jail_role"] = role.id
+    server_settings[ctx.guild.id]["jail_channel"] = channel.id
+
+    await ctx.send(f"🔒 Jail ready: {channel.mention}")
 
 # --- SHOP ---
 class ShopView(discord.ui.View):
@@ -81,15 +123,8 @@ class JoinView(discord.ui.View):
         self.players.append(inter.user.id)
         league_storage[self.league_id]["players"] = self.players
 
-        # DM LINK
         try:
-            embed = discord.Embed(
-                title="👋 League Joined!",
-                description=f"**ID:** `{self.league_id}`",
-                color=0x00ffcc
-            )
-            embed.add_field(name="Server Link", value=self.link)
-            await inter.user.send(embed=embed)
+            await inter.user.send(f"👋 League `{self.league_id}`\n🔗 {self.link}")
         except:
             pass
 
@@ -99,8 +134,8 @@ class JoinView(discord.ui.View):
 
         await inter.response.send_message("✅ Joined", ephemeral=True)
 
-# --- COMMANDS ---
-@bot.tree.command(name="shop")
+# --- SLASH COMMANDS ---
+@bot.tree.command(description="Open the shop")
 async def shop(inter):
     s = get_stats(inter.user.id)
     await inter.response.send_message(
@@ -108,7 +143,7 @@ async def shop(inter):
         view=ShopView()
     )
 
-@bot.tree.command(name="work")
+@bot.tree.command(description="Earn coins")
 async def work(inter):
     uid = inter.user.id
     now = datetime.datetime.now().timestamp()
@@ -122,7 +157,7 @@ async def work(inter):
 
     await inter.response.send_message(f"💼 Earned {earn}")
 
-@bot.tree.command(name="profile")
+@bot.tree.command(description="View profile")
 async def profile(inter, user: discord.Member=None):
     user = user or inter.user
     s = get_stats(user.id)
@@ -134,7 +169,7 @@ async def profile(inter, user: discord.Member=None):
 
     await inter.response.send_message(embed=embed)
 
-@bot.tree.command(name="leaderboard")
+@bot.tree.command(description="Leaderboard")
 async def leaderboard(inter):
     top = sorted(user_stats.items(), key=lambda x: x[1]["mmr"], reverse=True)[:10]
     desc = ""
@@ -143,12 +178,11 @@ async def leaderboard(inter):
         user = await bot.fetch_user(uid)
         desc += f"{i}. {user.name} - {data['mmr']}\n"
 
-    await inter.response.send_message(embed=discord.Embed(title="🏆", description=desc))
+    await inter.response.send_message(embed=discord.Embed(title="🏆 Leaderboard", description=desc))
 
-# --- LEAGUE HOST ---
-@bot.tree.command(name="leaguehost")
+# --- LEAGUE ---
+@bot.tree.command(description="Host a league")
 async def leaguehost(inter, format: str, perks: bool, match_type: str, region: str, link: str):
-
     formats = {"1v1":2,"2v2":4,"3v3":6,"4v4":8}
 
     if format not in formats:
@@ -157,25 +191,17 @@ async def leaguehost(inter, format: str, perks: bool, match_type: str, region: s
     max_p = formats[format]
     league_id = "".join(random.choice("ABC123XYZ") for _ in range(6))
 
-    embed = discord.Embed(
-        title=f"{format} | {match_type} | {'Perks' if perks else 'No Perks'}",
-        color=0x00ffcc
-    )
+    embed = discord.Embed(title=f"{format} | {match_type} | {'Perks' if perks else 'No Perks'}")
     embed.add_field(name="League ID", value=league_id)
     embed.add_field(name="Players", value=f"1/{max_p}")
     embed.add_field(name="Region", value=region.upper())
 
     view = JoinView(league_id, max_p, inter.user.id, link)
-
     await inter.response.send_message(embed=embed, view=view)
 
-    league_storage[league_id] = {
-        "players":[inter.user.id],
-        "host":inter.user.id
-    }
+    league_storage[league_id] = {"players":[inter.user.id]}
 
-# --- END LEAGUE ---
-@bot.tree.command(name="endleague")
+@bot.tree.command(description="End a league")
 async def endleague(inter, league_id: str):
     league_id = league_id.upper()
 
@@ -189,111 +215,26 @@ async def endleague(inter, league_id: str):
         s["wins"] += 1
         s["coins"] += 20
         s["mmr"] += 10
-        weekly_activity[p] = weekly_activity.get(p, 0) + 1
 
     del league_storage[league_id]
     await inter.response.send_message("🏁 League ended")
 
-# --- MVP ---
-@bot.tree.command(name="mvpannounce")
-async def mvpannounce(inter):
-    if not weekly_activity:
-        return await inter.response.send_message("No data")
-
-    mvp = max(weekly_activity, key=weekly_activity.get)
-    user = await bot.fetch_user(mvp)
-
-    await inter.response.send_message(f"🌟 MVP: {user.mention}")
-    weekly_activity.clear()
-
-# --- MODERATION ---
-@bot.command()
-async def r(ctx, member: discord.Member, *, role_name):
-    if not has_perm(ctx, "manage_roles"):
-        return await no_perm(ctx)
-
-    role = discord.utils.find(lambda r: role_name.lower() in r.name.lower(), ctx.guild.roles)
-    if not role:
-        return await ctx.send("Role not found")
-
-    if role in member.roles:
-        await member.remove_roles(role)
-        await ctx.send("❌ Removed")
-    else:
-        await member.add_roles(role)
-        await ctx.send("✅ Added")
-
-@bot.command()
-async def t(ctx, member: discord.Member, time: int, *, reason="None"):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-
-    await member.timeout(datetime.timedelta(seconds=time))
-    await ctx.send("⏳ Timed out")
-
-@bot.command()
-async def unt(ctx, member: discord.Member):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-
-    await member.timeout(None)
-    await ctx.send("✅ Timeout removed")
-
-@bot.command()
-async def b(ctx, member: discord.Member):
-    if not has_perm(ctx, "ban_members"):
-        return await no_perm(ctx)
-
-    await member.ban()
-    await ctx.send("🔨 Banned")
-
-@bot.command()
-async def unb(ctx, user: discord.User):
-    if not has_perm(ctx, "ban_members"):
-        return await no_perm(ctx)
-
-    await ctx.guild.unban(user)
-    await ctx.send("✅ Unbanned")
-
-@bot.command()
-async def k(ctx, member: discord.Member):
-    if not has_perm(ctx, "kick_members"):
-        return await no_perm(ctx)
-
-    await member.kick()
-    await ctx.send("👢 Kicked")
-
-@bot.command()
-async def p(ctx, amount: int):
-    if not has_perm(ctx, "manage_messages"):
-        return await no_perm(ctx)
-
-    await ctx.channel.purge(limit=amount)
-    await ctx.send(f"🧹 Deleted {amount}", delete_after=2)
-
+# --- WARN ---
 @bot.command()
 async def w(ctx, member: discord.Member, *, reason="None"):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
 
     warns[member.id] = warns.get(member.id, 0) + 1
-    await ctx.send(f"⚠️ Warned ({warns[member.id]})")
 
-@bot.command()
-async def unw(ctx, member: discord.Member):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-
-    warns[member.id] = 0
-    await ctx.send("✅ Warns cleared")
+    await ctx.send(f"⚠️ {member.mention} warned for **{reason}**")
+    log_action(ctx.guild, f"{ctx.author} warned {member} | {reason} | total {warns[member.id]}")
 
 # --- READY ---
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     print("Bot ready")
-    print("Bot ready")
 
 keep_alive()  # <--- PRIDĖKITE ČIA
 bot.run(TOKEN)
-
