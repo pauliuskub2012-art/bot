@@ -3,7 +3,7 @@ from discord.ext import commands
 from discord import app_commands
 import os, random, datetime, asyncio
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("TOKEN")
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=".", intents=intents)
