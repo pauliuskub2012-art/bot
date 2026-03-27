@@ -35,7 +35,7 @@ def has_perm(ctx, perm):
     return getattr(ctx.author.guild_permissions, perm)
 
 async def no_perm(ctx):
-    await ctx.send("🚫 No perms lil bro 😭")
+    await ctx.send("🚫 You don't have permission to use this command.")
 
 # --- LOGGING ---
 def log_action(guild, message):
@@ -45,7 +45,7 @@ def log_action(guild, message):
         if channel:
             asyncio.create_task(channel.send(message))
 
-@bot.command()
+@bot.command(help="Set a logs channel for moderation actions")
 async def setup_logs(ctx, channel: discord.TextChannel):
     if not has_perm(ctx, "manage_guild"):
         return await no_perm(ctx)
@@ -70,13 +70,13 @@ class ShopView(discord.ui.View):
         s[item] = True
         await inter.response.send_message(f"✅ {item} activated", ephemeral=True)
 
-    @discord.ui.button(label="Freeze 🧊")
+    @discord.ui.button(label="Freeze 🧊", style=discord.ButtonStyle.blurple)
     async def freeze(self, i, b): await self.buy(i, "freeze", 150)
 
-    @discord.ui.button(label="Insurance 🛡️")
+    @discord.ui.button(label="Insurance 🛡️", style=discord.ButtonStyle.green)
     async def insurance(self, i, b): await self.buy(i, "insurance", 300)
 
-    @discord.ui.button(label="Booster 🔥")
+    @discord.ui.button(label="Booster 🔥", style=discord.ButtonStyle.red)
     async def booster(self, i, b): await self.buy(i, "booster", 500)
 
 # --- JOIN VIEW ---
@@ -117,8 +117,8 @@ class JoinView(discord.ui.View):
 
         await inter.response.send_message("✅ Joined", ephemeral=True)
 
-# --- COMMANDS ---
-@bot.tree.command(name="shop")
+# --- SLASH COMMANDS ---
+@bot.tree.command(name="shop", description="Open the shop to buy perks")
 async def shop(inter):
     s = get_stats(inter.user.id)
     await inter.response.send_message(
@@ -126,21 +126,21 @@ async def shop(inter):
         view=ShopView()
     )
 
-@bot.tree.command(name="work")
+@bot.tree.command(name="work", description="Work to earn coins (30 min cooldown)")
 async def work(inter):
     uid = inter.user.id
     now = datetime.datetime.now().timestamp()
 
     if uid in last_work and now - last_work[uid] < 1800:
-        return await inter.response.send_message("⏳ Wait", ephemeral=True)
+        return await inter.response.send_message("⏳ You need to wait before working again.", ephemeral=True)
 
     earn = random.randint(25, 75)
     get_stats(uid)["coins"] += earn
     last_work[uid] = now
 
-    await inter.response.send_message(f"💼 Earned {earn}")
+    await inter.response.send_message(f"💼 You earned {earn} coins!")
 
-@bot.tree.command(name="profile")
+@bot.tree.command(name="profile", description="Check your or another user's profile")
 async def profile(inter, user: discord.Member=None):
     user = user or inter.user
     s = get_stats(user.id)
@@ -152,7 +152,7 @@ async def profile(inter, user: discord.Member=None):
 
     await inter.response.send_message(embed=embed)
 
-@bot.tree.command(name="leaderboard")
+@bot.tree.command(name="leaderboard", description="Show top 10 players by MMR")
 async def leaderboard(inter):
     top = sorted(user_stats.items(), key=lambda x: x[1]["mmr"], reverse=True)[:10]
     desc = ""
@@ -161,12 +161,10 @@ async def leaderboard(inter):
         user = await bot.fetch_user(uid)
         desc += f"{i}. {user.name} - {data['mmr']}\n"
 
-    await inter.response.send_message(embed=discord.Embed(title="🏆", description=desc))
+    await inter.response.send_message(embed=discord.Embed(title="🏆 Leaderboard", description=desc))
 
-# --- LEAGUE HOST ---
-@bot.tree.command(name="leaguehost")
+@bot.tree.command(name="leaguehost", description="Host a new league")
 async def leaguehost(inter, format: str, perks: bool, match_type: str, region: str, link: str):
-
     formats = {"1v1":2,"2v2":4,"3v3":6,"4v4":8}
 
     if format not in formats:
@@ -192,13 +190,12 @@ async def leaguehost(inter, format: str, perks: bool, match_type: str, region: s
         "host":inter.user.id
     }
 
-# --- END LEAGUE ---
-@bot.tree.command(name="endleague")
+@bot.tree.command(name="endleague", description="End a league and reward players")
 async def endleague(inter, league_id: str):
     league_id = league_id.upper()
 
     if league_id not in league_storage:
-        return await inter.response.send_message("Not found")
+        return await inter.response.send_message("League not found.")
 
     data = league_storage[league_id]
 
@@ -212,11 +209,10 @@ async def endleague(inter, league_id: str):
     del league_storage[league_id]
     await inter.response.send_message("🏁 League ended")
 
-# --- MVP ---
-@bot.tree.command(name="mvpannounce")
+@bot.tree.command(name="mvpannounce", description="Announce weekly MVP")
 async def mvpannounce(inter):
     if not weekly_activity:
-        return await inter.response.send_message("No data")
+        return await inter.response.send_message("No activity data yet.")
 
     mvp = max(weekly_activity, key=weekly_activity.get)
     user = await bot.fetch_user(mvp)
@@ -224,8 +220,8 @@ async def mvpannounce(inter):
     await inter.response.send_message(f"🌟 MVP: {user.mention}")
     weekly_activity.clear()
 
-# --- MODERATION COMMANDS ---
-@bot.command()
+# --- PREFIX MODERATION COMMANDS ---
+@bot.command(help="Add or remove a role from a user")
 async def r(ctx, member: discord.Member, *, role_name):
     if not has_perm(ctx, "manage_roles"):
         return await no_perm(ctx)
@@ -243,16 +239,16 @@ async def r(ctx, member: discord.Member, *, role_name):
         await ctx.send("✅ Added")
         log_action(ctx.guild, f"✅ {ctx.author} added role {role.name} to {member}")
 
-@bot.command()
+@bot.command(help="Timeout a user for a certain number of seconds")
 async def t(ctx, member: discord.Member, time: int, *, reason="None"):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
 
     await member.timeout(datetime.timedelta(seconds=time))
-    await ctx.send("⏳ Timed out")
+    await ctx.send(f"⏳ {member.mention} timed out for {time} seconds")
     log_action(ctx.guild, f"⏳ {ctx.author} timed out {member} for {time}s | Reason: {reason}")
 
-@bot.command()
+@bot.command(help="Remove timeout from a user")
 async def unt(ctx, member: discord.Member):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
@@ -261,7 +257,7 @@ async def unt(ctx, member: discord.Member):
     await ctx.send("✅ Timeout removed")
     log_action(ctx.guild, f"✅ {ctx.author} removed timeout from {member}")
 
-@bot.command()
+@bot.command(help="Ban a user")
 async def b(ctx, member: discord.Member):
     if not has_perm(ctx, "ban_members"):
         return await no_perm(ctx)
@@ -270,7 +266,7 @@ async def b(ctx, member: discord.Member):
     await ctx.send("🔨 Banned")
     log_action(ctx.guild, f"🔨 {ctx.author} banned {member}")
 
-@bot.command()
+@bot.command(help="Unban a user")
 async def unb(ctx, user: discord.User):
     if not has_perm(ctx, "ban_members"):
         return await no_perm(ctx)
@@ -279,7 +275,7 @@ async def unb(ctx, user: discord.User):
     await ctx.send("✅ Unbanned")
     log_action(ctx.guild, f"✅ {ctx.author} unbanned {user}")
 
-@bot.command()
+@bot.command(help="Kick a user")
 async def k(ctx, member: discord.Member):
     if not has_perm(ctx, "kick_members"):
         return await no_perm(ctx)
@@ -288,7 +284,7 @@ async def k(ctx, member: discord.Member):
     await ctx.send("👢 Kicked")
     log_action(ctx.guild, f"👢 {ctx.author} kicked {member}")
 
-@bot.command()
+@bot.command(help="Purge messages in a channel")
 async def p(ctx, amount: int):
     if not has_perm(ctx, "manage_messages"):
         return await no_perm(ctx)
@@ -297,7 +293,7 @@ async def p(ctx, amount: int):
     await ctx.send(f"🧹 Deleted {amount}", delete_after=2)
     log_action(ctx.guild, f"🧹 {ctx.author} deleted {amount} messages in {ctx.channel.mention}")
 
-@bot.command()
+@bot.command(help="Warn a user")
 async def w(ctx, member: discord.Member, *, reason="None"):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
@@ -308,7 +304,7 @@ async def w(ctx, member: discord.Member, *, reason="None"):
         f"⚠️ {ctx.author} warned {member} | Reason: {reason} | Total warns: {warns[member.id]}"
     )
 
-@bot.command()
+@bot.command(help="Clear warns of a user")
 async def unw(ctx, member: discord.Member):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
@@ -322,7 +318,5 @@ async def unw(ctx, member: discord.Member):
 async def on_ready():
     await bot.tree.sync()
     print("Bot ready")
-    # ... (all your other bot code) ...
-
-keep_alive()  # <--- Add this line here
+keep_alive()
 bot.run(TOKEN)
