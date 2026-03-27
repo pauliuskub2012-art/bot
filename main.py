@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import os, random, datetime, asyncio
+import os, random, datetime, asyncio, re
 from keep_alive import keep_alive
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -35,7 +35,7 @@ def has_perm(ctx, perm):
     return getattr(ctx.author.guild_permissions, perm)
 
 async def no_perm(ctx):
-    await ctx.send("🚫 You don't have permission.")
+    await ctx.send("🚫 No permission.")
 
 # --- LOGGING ---
 def log_action(guild, message):
@@ -83,6 +83,74 @@ async def jail(ctx, member: discord.Member):
     await ctx.send(f"🚔 {member.mention} jailed")
     log_action(ctx.guild, f"🚔 {ctx.author} jailed {member}")
 
+# --- RANK SYSTEM ---
+@bot.tree.command(name="ranksetup", description="Configure rank system with role base and channel")
+async def ranksetup(inter: discord.Interaction, role: discord.Role, channel: discord.TextChannel):
+    if not inter.user.guild_permissions.manage_guild:
+        return await inter.response.send_message("No permission", ephemeral=True)
+
+    server_settings.setdefault(inter.guild.id, {})
+    server_settings[inter.guild.id]["rank_role"] = role.id
+    server_settings[inter.guild.id]["rank_channel"] = channel.id
+
+    await inter.response.send_message("✅ Rank system set", ephemeral=True)
+    log_action(inter.guild, f"📊 {inter.user} configured rank system in {channel.name}")
+
+# --- AUTO RANK HANDLER ---
+@bot.event
+async def on_message(message):
+    await bot.process_commands(message)
+
+    if message.author.bot or not message.guild:
+        return
+
+    settings = server_settings.get(message.guild.id, {})
+    rank_channel_id = settings.get("rank_channel")
+
+    if not rank_channel_id or message.channel.id != rank_channel_id:
+        return
+
+    if not message.mentions:
+        return
+
+    member = message.mentions[0]
+    content = message.content.upper()
+
+    match = re.search(r'PR\s*(\d+)', content)
+    if not match:
+        return
+
+    rank_num = int(match.group(1))
+    if rank_num < 1 or rank_num > 10:
+        return
+
+    roles_to_remove = []
+    new_role = None
+
+    for role in message.guild.roles:
+        if role.name.upper().startswith("PR"):
+            try:
+                num = int(role.name[2:])
+                if 1 <= num <= 10:
+                    roles_to_remove.append(role)
+                    if num == rank_num:
+                        new_role = role
+            except:
+                continue
+
+    if not new_role:
+        return
+
+    try:
+        await member.remove_roles(*[r for r in roles_to_remove if r in member.roles])
+        await member.add_roles(new_role)
+
+        log_action(message.guild,
+            f"📊 {message.author} set {member} to PR{rank_num}"
+        )
+    except Exception as e:
+        log_action(message.guild, f"❌ Rank error: {e}")
+
 # --- SHOP ---
 class ShopView(discord.ui.View):
     def __init__(self):
@@ -107,39 +175,6 @@ class ShopView(discord.ui.View):
     @discord.ui.button(label="Booster 🔥")
     async def booster(self, i, b): await self.buy(i, "booster", 500)
 
-# --- JOIN VIEW ---
-class JoinView(discord.ui.View):
-    def __init__(self, league_id, max_p, host_id, link):
-        super().__init__(timeout=None)
-        self.league_id = league_id
-        self.max_p = max_p
-        self.players = [host_id]
-        self.link = link
-
-    @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
-    async def join(self, inter: discord.Interaction, btn):
-        if inter.user.id in self.players:
-            return await inter.response.send_message("Already joined", ephemeral=True)
-
-        if len(self.players) >= self.max_p:
-            return await inter.response.send_message("League full", ephemeral=True)
-
-        self.players.append(inter.user.id)
-        league_storage[self.league_id]["players"] = self.players
-
-        try:
-            embed = discord.Embed(title="👋 League Joined!", description=f"ID: {self.league_id}")
-            embed.add_field(name="Link", value=self.link)
-            await inter.user.send(embed=embed)
-        except:
-            pass
-
-        embed = inter.message.embeds[0]
-        embed.set_field_at(1, name="Players", value=f"{len(self.players)}/{self.max_p}")
-        await inter.message.edit(embed=embed, view=self)
-
-        await inter.response.send_message("✅ Joined", ephemeral=True)
-
 # --- SLASH COMMANDS ---
 @bot.tree.command(description="Open shop")
 async def shop(inter):
@@ -163,29 +198,6 @@ async def work(inter):
 
     await inter.response.send_message(f"💼 Earned {earn}")
 
-@bot.tree.command(description="View profile")
-async def profile(inter, user: discord.Member=None):
-    user = user or inter.user
-    s = get_stats(user.id)
-
-    embed = discord.Embed(title=user.name)
-    embed.add_field(name="Coins", value=s["coins"])
-    embed.add_field(name="MMR", value=s["mmr"])
-    embed.add_field(name="Wins", value=s["wins"])
-
-    await inter.response.send_message(embed=embed)
-
-@bot.tree.command(description="Leaderboard")
-async def leaderboard(inter):
-    top = sorted(user_stats.items(), key=lambda x: x[1]["mmr"], reverse=True)[:10]
-    desc = ""
-
-    for i, (uid, data) in enumerate(top, 1):
-        user = await bot.fetch_user(uid)
-        desc += f"{i}. {user.name} - {data['mmr']}\n"
-
-    await inter.response.send_message(embed=discord.Embed(title="🏆", description=desc))
-
 # --- MODERATION ---
 @bot.command(help="Ban user")
 async def b(ctx, member: discord.Member):
@@ -205,24 +217,6 @@ async def k(ctx, member: discord.Member):
     await ctx.send("👢 Kicked")
     log_action(ctx.guild, f"{ctx.author} kicked {member}")
 
-@bot.command(help="Timeout user")
-async def t(ctx, member: discord.Member, time: int):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-
-    await member.timeout(datetime.timedelta(seconds=time))
-    await ctx.send("⏳ Timed out")
-    log_action(ctx.guild, f"{ctx.author} timed out {member}")
-
-@bot.command(help="Remove timeout")
-async def unt(ctx, member: discord.Member):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-
-    await member.timeout(None)
-    await ctx.send("✅ Timeout removed")
-    log_action(ctx.guild, f"{ctx.author} removed timeout {member}")
-
 @bot.command(help="Warn user")
 async def w(ctx, member: discord.Member, *, reason="None"):
     if not has_perm(ctx, "moderate_members"):
@@ -231,16 +225,6 @@ async def w(ctx, member: discord.Member, *, reason="None"):
     warns[member.id] = warns.get(member.id, 0) + 1
     await ctx.send(f"⚠️ Warned ({warns[member.id]})")
     log_action(ctx.guild, f"{ctx.author} warned {member}")
-
-@bot.command(help="Clear warns")
-async def unw(ctx, member: discord.Member):
-    warns[member.id] = 0
-    await ctx.send("✅ Cleared warns")
-
-@bot.command(help="Purge messages")
-async def p(ctx, amount: int):
-    await ctx.channel.purge(limit=amount)
-    await ctx.send(f"🧹 Deleted {amount}", delete_after=2)
 
 # --- READY ---
 @bot.event
