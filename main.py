@@ -4,7 +4,7 @@ from discord import app_commands
 import os, random, datetime, asyncio
 from keep_alive import keep_alive
 
-TOKEN = os.getenv("TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix=".", intents=intents)
@@ -292,5 +292,8 @@ async def unw(ctx, member: discord.Member):
 async def on_ready():
     await bot.tree.sync()
     print("Bot ready")
+    print("Bot ready")
 
+keep_alive()  # <--- PRIDĖKITE ČIA
 bot.run(TOKEN)
+
