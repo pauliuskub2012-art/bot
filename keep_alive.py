@@ -8,7 +8,7 @@ def home():
     return "I'm alive"
 
 def run():
-    # Render reikalauja porto 10000 arba 8080
+    # Render reikalauja klausytis visų adresų (0.0.0.0)
     app.run(host='0.0.0.0', port=10000)
 
 def keep_alive():
