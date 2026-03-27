@@ -1,13 +1,13 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import os, random, datetime, asyncio, re
+import os, random, datetime, re
 from keep_alive import keep_alive
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix=".", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix=".", intents=intents)
 
 # --- STORAGE ---
 league_storage = {}
@@ -26,268 +26,241 @@ async def no_perm(ctx):
 async def log_action(guild, message, title="Action"):
     chan_id = server_settings.get(guild.id, {}).get("logs")
     if chan_id:
-        channel = bot.get_channel(chan_id)
+        channel = guild.get_channel(chan_id)
         if channel:
-            embed = discord.Embed(title=title, description=message, color=discord.Color.blurple(), timestamp=datetime.datetime.utcnow())
+            embed = discord.Embed(
+                title=title,
+                description=message,
+                color=discord.Color.blurple(),
+                timestamp=datetime.datetime.utcnow()
+            )
             await channel.send(embed=embed)
 
-# --- HELP COMMAND ---
+# --- SETUP ---
 @bot.command()
-async def help(ctx):
-    embed = discord.Embed(title="📜 Help", color=discord.Color.blue())
-    for cmd in bot.commands:
-        if cmd.hidden:
-            continue
-        embed.add_field(name=f".{cmd.name}", value=cmd.help or "No description", inline=False)
-    await ctx.send(embed=embed)
-
-# --- SETUP COMMANDS ---
-@bot.command(help="Set logs channel")
 async def setup_logs(ctx, channel: discord.TextChannel):
     if not has_perm(ctx, "manage_guild"):
         return await no_perm(ctx)
     server_settings.setdefault(ctx.guild.id, {})["logs"] = channel.id
     await ctx.send(f"📜 Logs set to {channel.mention}")
 
-@bot.command(help="Set jail role")
+@bot.command()
 async def setup_jail(ctx, role: discord.Role):
     if not has_perm(ctx, "manage_guild"):
         return await no_perm(ctx)
     server_settings.setdefault(ctx.guild.id, {})["jail"] = role.id
     await ctx.send(f"🚔 Jail role set to {role.mention}")
-    await log_action(ctx.guild, f"{ctx.author.mention} set jail role {role.name}", "Jail Setup")
 
 def get_jail_role(guild):
     role_id = server_settings.get(guild.id, {}).get("jail")
     return guild.get_role(role_id) if role_id else None
 
-# --- JAIL SYSTEM ---
-@bot.command(help="Jail a user")
+# --- JAIL ---
+@bot.command()
 async def jail(ctx, member: discord.Member):
     if not has_perm(ctx, "moderate_members"):
         return await no_perm(ctx)
     role = get_jail_role(ctx.guild)
     if not role:
-        return await ctx.send("❌ Use .setup_jail first")
+        return await ctx.send("❌ Setup jail first")
     await member.add_roles(role)
     await ctx.send(f"🚔 {member.mention} jailed")
-    await log_action(ctx.guild, f"{ctx.author.mention} jailed {member.mention}", "Jail")
 
-# --- RANK SYSTEM ---
-@bot.tree.command(name="ranksetup", description="Set rank channel where messages like '@user PR6' update roles silently")
+# --- RANK SYSTEM FIXED ---
+@bot.tree.command(name="ranksetup")
 async def ranksetup(inter: discord.Interaction, role: discord.Role, channel: discord.TextChannel):
     if not inter.user.guild_permissions.manage_guild:
         return await inter.response.send_message("No permission", ephemeral=True)
     server_settings.setdefault(inter.guild.id, {})["rank_channel"] = channel.id
-    await inter.response.send_message("✅ Rank system configured", ephemeral=True)
-    await log_action(inter.guild, f"{inter.user.mention} set rank channel to {channel.mention}", "Rank Setup")
+    await inter.response.send_message("✅ Rank setup done", ephemeral=True)
 
 @bot.event
 async def on_message(message):
     await bot.process_commands(message)
     if message.author.bot or not message.guild:
         return
+
     settings = server_settings.get(message.guild.id, {})
     if message.channel.id != settings.get("rank_channel"):
         return
     if not message.mentions:
         return
+
     member = message.mentions[0]
     match = re.search(r'\bPR\s*(\d+)\b', message.content.upper())
     if not match:
         return
+
     rank = int(match.group(1))
     if not (1 <= rank <= 10):
         return
+
     new_role = None
     pr_roles = []
+
     for role in message.guild.roles:
-        name = role.name.upper()
-        if name.startswith("PR"):
+        if role.name.upper().startswith("PR"):
+            pr_roles.append(role)
             try:
-                num = int(name.replace("PR", ""))
-                if 1 <= num <= 10:
-                    pr_roles.append(role)
-                    if num == rank:
-                        new_role = role
+                if int(re.findall(r'\d+', role.name)[0]) == rank:
+                    new_role = role
             except:
                 continue
+
     if not new_role:
         return
-    remove_roles = [r for r in pr_roles if r in member.roles]
+
+    remove_roles = [r for r in member.roles if r in pr_roles]
     if remove_roles:
         await member.remove_roles(*remove_roles)
-    await member.add_roles(new_role)
-    await log_action(message.guild, f"{message.author.mention} set {member.mention} to PR{rank}", "Rank Update")
 
-# --- LEAGUE SYSTEM ---
+    await member.add_roles(new_role)
+
+# --- LEAGUE ROLE SETUP ---
+@bot.tree.command(name="leaguesetup", description="Set role required to host leagues")
+async def leaguesetup(inter: discord.Interaction, role: discord.Role):
+    if not inter.user.guild_permissions.manage_guild:
+        return await inter.response.send_message("❌ No permission", ephemeral=True)
+
+    server_settings.setdefault(inter.guild.id, {})["league_role"] = role.id
+    await inter.response.send_message(f"✅ League role set to {role.mention}", ephemeral=True)
+
+# --- LEAGUE VIEW ---
 class JoinView(discord.ui.View):
-    def __init__(self, league_id, max_p, host_id, link):
+    def __init__(self, league_id):
         super().__init__(timeout=None)
         self.league_id = league_id
-        self.max_p = max_p
-        self.players = [host_id]
-        self.link = link
-        self.closed = False  # League status
 
     @discord.ui.button(label="Join League", style=discord.ButtonStyle.green)
-    async def join(self, inter: discord.Interaction, btn):
-        if self.closed:
-            return await inter.response.send_message("❌ League has ended.", ephemeral=True)
-        if inter.user.id in self.players:
+    async def join(self, inter: discord.Interaction, button):
+        league = league_storage.get(self.league_id)
+        if not league:
+            return await inter.response.send_message("❌ Not found", ephemeral=True)
+
+        if league["status"] == "ended":
+            return await inter.response.send_message("🔴 Ended", ephemeral=True)
+
+        if inter.user.id in league["players"]:
             return await inter.response.send_message("Already joined", ephemeral=True)
-        if len(self.players) >= self.max_p:
-            return await inter.response.send_message("League full", ephemeral=True)
-        self.players.append(inter.user.id)
-        league_storage[self.league_id]["players"] = self.players
+
+        if len(league["players"]) >= league["max"]:
+            league["status"] = "full"
+            await update_embed(inter.guild, self.league_id)
+            return await inter.response.send_message("🔴 Full", ephemeral=True)
+
+        league["players"].append(inter.user.id)
+        league["status"] = "ongoing" if len(league["players"]) < league["max"] else "full"
+
+        await update_embed(inter.guild, self.league_id)
         await inter.response.send_message("✅ Joined", ephemeral=True)
 
-    def close_league(self):
-        self.closed = True
-        for item in self.children:
-            item.disabled = True
+async def update_embed(guild, league_id):
+    league = league_storage[league_id]
+    msg = league["msg"]
 
-# --- LEAGUE COMMANDS ---
-@bot.tree.command(name="leaguehost", description="Host a league")
-async def leaguehost(inter: discord.Interaction, format: str, perks: bool, match_type: str, region: str, link: str):
+    status_map = {
+        "looking": "🟢",
+        "ongoing": "🟠",
+        "full": "🔴",
+        "ended": "🔴"
+    }
+
+    embed = discord.Embed(title="League", color=discord.Color.green())
+    embed.add_field(name="ID", value=f"{league_id} {status_map[league['status']]}")
+    embed.add_field(name="Players", value=f"{len(league['players'])}/{league['max']}")
+    embed.add_field(name="Link", value=league["link"])
+
+    await msg.edit(embed=embed)
+
+# --- LEAGUE HOST ---
+@bot.tree.command(name="leaguehost")
+async def leaguehost(inter: discord.Interaction, format: str, link: str):
+    settings = server_settings.get(inter.guild.id, {})
+    role_id = settings.get("league_role")
+
+    if role_id:
+        role = inter.guild.get_role(role_id)
+        if role not in inter.user.roles:
+            return await inter.response.send_message("❌ No permission", ephemeral=True)
+
     formats = {"1v1":2,"2v2":4,"3v3":6,"4v4":8}
     if format not in formats:
-        return await inter.response.send_message("Invalid format", ephemeral=True)
-    max_p = formats[format]
+        return await inter.response.send_message("❌ Invalid format", ephemeral=True)
+
     league_id = "".join(random.choice("ABC123XYZ") for _ in range(6))
-    view = JoinView(league_id, max_p, inter.user.id, link)
-    embed = discord.Embed(title=f"{format} | {match_type}", color=discord.Color.green())
-    embed.add_field(name="ID", value=league_id)
-    embed.add_field(name="Players", value=f"1/{max_p}")
-    embed.add_field(name="Region", value=region)
-    msg = await inter.response.send_message(embed=embed, view=view)
-    league_storage[league_id] = {"players":[inter.user.id], "view": view, "message": msg}
-    await log_action(inter.guild, f"{inter.user.mention} hosted league {league_id}", "League Host")
+    msg = await inter.channel.send("Creating league...")
 
-@bot.tree.command(name="endleague", description="End league and reward players")
+    league_storage[league_id] = {
+        "players":[inter.user.id],
+        "max":formats[format],
+        "status":"looking",
+        "link":link,
+        "msg":msg
+    }
+
+    await update_embed(inter.guild, league_id)
+    await msg.edit(view=JoinView(league_id))
+
+    await inter.response.send_message(f"✅ League {league_id} created", ephemeral=True)
+
+# --- END LEAGUE ---
+@bot.tree.command(name="endleague")
 async def endleague(inter: discord.Interaction, league_id: str):
-    league_id = league_id.upper()
-    if league_id not in league_storage:
-        return await inter.response.send_message("❌ League not found", ephemeral=True)
-    # Update weekly activity
-    for p in league_storage[league_id]["players"]:
-        weekly_activity[p] = weekly_activity.get(p, 0) + 1
-    # Close league so buttons can't be clicked
-    view = league_storage[league_id].get("view")
-    if view:
-        view.close_league()
-        msg = league_storage[league_id].get("message")
-        if msg:
-            try:
-                await msg.edit(view=view)
-            except:
-                pass
-    del league_storage[league_id]
-    await inter.response.send_message("🏁 League ended. No more joins allowed.")
-    await log_action(inter.guild, f"{inter.user.mention} ended league {league_id}", "League End")
+    league = league_storage.get(league_id.upper())
+    if not league:
+        return await inter.response.send_message("❌ Not found", ephemeral=True)
 
-@bot.tree.command(name="mvpannounce", description="Announce most active player")
-async def mvpannounce(inter: discord.Interaction):
-    if not weekly_activity:
-        return await inter.response.send_message("No data", ephemeral=True)
-    mvp = max(weekly_activity, key=weekly_activity.get)
-    user = await bot.fetch_user(mvp)
-    await inter.response.send_message(f"🌟 MVP: {user.mention}")
-    weekly_activity.clear()
-    await log_action(inter.guild, f"MVP announced: {user.mention}", "MVP")
+    league["status"] = "ended"
+    await update_embed(inter.guild, league_id)
 
-# --- MODERATION COMMANDS ---
-@bot.command(help="Ban user")
+    await inter.response.send_message("🏁 Ended")
+
+# --- MOD COMMANDS ---
+@bot.command()
 async def b(ctx, member: discord.Member):
-    if not has_perm(ctx, "ban_members"):
-        return await no_perm(ctx)
     await member.ban()
-    await ctx.send("🔨 Banned")
-    await log_action(ctx.guild, f"{ctx.author.mention} banned {member.mention}", "Ban")
+    await ctx.send("Banned")
 
-@bot.command(help="Kick user")
+@bot.command()
 async def k(ctx, member: discord.Member):
-    if not has_perm(ctx, "kick_members"):
-        return await no_perm(ctx)
     await member.kick()
-    await ctx.send("👢 Kicked")
-    await log_action(ctx.guild, f"{ctx.author.mention} kicked {member.mention}", "Kick")
+    await ctx.send("Kicked")
 
-@bot.command(help="Warn user")
-async def w(ctx, member: discord.Member, *, reason="None"):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-    warns[member.id] = warns.get(member.id, 0) + 1
-    await ctx.send(f"⚠️ Warned ({warns[member.id]})")
-    await log_action(ctx.guild, f"{ctx.author.mention} warned {member.mention} | {reason}", "Warn")
+@bot.command()
+async def w(ctx, member: discord.Member):
+    warns[member.id] = warns.get(member.id,0)+1
+    await ctx.send("Warned")
 
-@bot.command(help="Unwarn a user")
+@bot.command()
 async def unw(ctx, member: discord.Member):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-    warns[member.id] = max(0, warns.get(member.id, 0) - 1)
-    await ctx.send(f"✅ Unwarned ({warns[member.id]})")
-    await log_action(ctx.guild, f"{ctx.author.mention} unwarned {member.mention}", "Unwarn")
+    warns[member.id] = max(0,warns.get(member.id,0)-1)
+    await ctx.send("Unwarned")
 
-@bot.command(help="Assign a role by shorthand")
+@bot.command()
 async def r(ctx, member: discord.Member, *, role_name):
-    if not has_perm(ctx, "manage_roles"):
-        return await no_perm(ctx)
-    role_name = role_name.lower()
-    found_role = next((r for r in ctx.guild.roles if role_name in r.name.lower()), None)
-    if not found_role:
-        return await ctx.send("❌ Role not found")
-    await member.add_roles(found_role)
-    await ctx.send(f"✅ {member.mention} now has {found_role.name}")
-    await log_action(ctx.guild, f"{ctx.author.mention} gave {member.mention} role {found_role.name}", "Role Assign")
+    role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if role:
+        await member.add_roles(role)
+        await ctx.send("Role added")
 
-@bot.command(help="Unban a user")
+@bot.command()
 async def unb(ctx, user: discord.User):
-    if not has_perm(ctx, "ban_members"):
-        return await no_perm(ctx)
-    bans = await ctx.guild.bans()
-    for ban in bans:
-        if ban.user.id == user.id:
-            await ctx.guild.unban(user)
-            await ctx.send(f"✅ {user} unbanned")
-            await log_action(ctx.guild, f"{ctx.author.mention} unbanned {user.mention}", "Unban")
-            return
-    await ctx.send("❌ User not banned")
+    await ctx.guild.unban(user)
+    await ctx.send("Unbanned")
 
-@bot.command(help="Timeout a user")
-async def t(ctx, member: discord.Member, time: str, *, reason="None"):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
-    try:
-        unit = time[-1]
-        amount = int(time[:-1])
-        delta = {"s":datetime.timedelta(seconds=amount),
-                 "m":datetime.timedelta(minutes=amount),
-                 "h":datetime.timedelta(hours=amount),
-                 "d":datetime.timedelta(days=amount)}.get(unit)
-        if not delta:
-            return await ctx.send("❌ Invalid time format. Use s/m/h/d")
-        await member.timeout(delta, reason=reason)
-        await ctx.send(f"⏱ Timed out {member.mention} for {time}")
-        await log_action(ctx.guild, f"{ctx.author.mention} timed out {member.mention} for {time} | {reason}", "Timeout")
-    except Exception as e:
-        await ctx.send(f"❌ Error: {e}")
+@bot.command()
+async def t(ctx, member: discord.Member):
+    await member.timeout(datetime.timedelta(minutes=10))
+    await ctx.send("Timed out")
 
-@bot.command(help="Remove timeout from a user")
+@bot.command()
 async def unt(ctx, member: discord.Member):
-    if not has_perm(ctx, "moderate_members"):
-        return await no_perm(ctx)
     await member.timeout(None)
-    await ctx.send(f"✅ Timeout removed from {member.mention}")
-    await log_action(ctx.guild, f"{ctx.author.mention} removed timeout from {member.mention}", "Timeout Remove")
+    await ctx.send("Timeout removed")
 
-@bot.command(help="Purge messages")
+@bot.command()
 async def p(ctx, count: int):
-    if not has_perm(ctx, "manage_messages"):
-        return await no_perm(ctx)
-    deleted = await ctx.channel.purge(limit=count)
-    await ctx.send(f"🧹 Deleted {len(deleted)} messages", delete_after=5)
-    await log_action(ctx.guild, f"{ctx.author.mention} deleted {len(deleted)} messages in {ctx.channel.mention}", "Purge")
+    await ctx.channel.purge(limit=count)
 
 # --- READY ---
 @bot.event
