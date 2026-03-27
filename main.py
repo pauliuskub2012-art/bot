@@ -7,7 +7,8 @@ from keep_alive import keep_alive
 TOKEN = os.getenv("DISCORD_TOKEN")
 
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix=".", intents=intents)
+# Disable default help command
+bot = commands.Bot(command_prefix=".", intents=intents, help_command=None)
 
 # --- STORAGE ---
 league_storage = {}
@@ -30,6 +31,16 @@ async def log_action(guild, message, title="Action"):
         if channel:
             embed = discord.Embed(title=title, description=message, color=discord.Color.blurple(), timestamp=datetime.datetime.utcnow())
             await channel.send(embed=embed)
+
+# --- HELP COMMAND ---
+@bot.command()
+async def help(ctx):
+    embed = discord.Embed(title="📜 Help", color=discord.Color.blue())
+    for cmd in bot.commands:
+        if cmd.hidden:
+            continue
+        embed.add_field(name=f".{cmd.name}", value=cmd.help or "No description", inline=False)
+    await ctx.send(embed=embed)
 
 # --- SETUP COMMANDS ---
 @bot.command(help="Set logs channel")
@@ -190,7 +201,7 @@ async def w(ctx, member: discord.Member, *, reason="None"):
     await ctx.send(f"⚠️ Warned ({warns[member.id]})")
     await log_action(ctx.guild, f"{ctx.author.mention} warned {member.mention} | {reason}", "Warn")
 
-# --- NEW COMMANDS WITH EMBED LOGGING ---
+# --- NEW COMMANDS ---
 @bot.command(help="Unwarn a user")
 async def unw(ctx, member: discord.Member):
     if not has_perm(ctx, "moderate_members"):
